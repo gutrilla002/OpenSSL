@@ -15,11 +15,30 @@
 #include <openssl/engine.h>
 #include "internal/asn1_int.h"
 #include "internal/evp_int.h"
+#include "internal/thread_once.h"
 
 #include "standard_methods.h"
 
-typedef int sk_cmp_fn_type(const char *const *a, const char *const *b);
+static CRYPTO_RWLOCK *app_methods_lock;
+static CRYPTO_ONCE app_methods_init = CRYPTO_ONCE_STATIC_INIT;
 static STACK_OF(EVP_PKEY_ASN1_METHOD) *app_methods = NULL;
+
+static void do_app_methods_deinit(void)
+{
+    sk_EVP_PKEY_ASN1_METHOD_free(app_methods);
+    CRYPTO_THREAD_lock_free(app_methods_lock);
+    app_methods_lock = NULL;
+}
+
+DEFINE_RUN_ONCE_STATIC(do_app_methods_init)
+{
+    OPENSSL_init_crypto(0, NULL);
+    if ((app_methods_lock = CRYPTO_THREAD_glock_new("app_methods")) == NULL)
+        return 0;
+
+    OPENSSL_atexit(do_app_methods_deinit);
+    return 1;
+}
 
 DECLARE_OBJ_BSEARCH_CMP_FN(const EVP_PKEY_ASN1_METHOD *,
                            const EVP_PKEY_ASN1_METHOD *, ameth);
@@ -36,14 +55,25 @@ IMPLEMENT_OBJ_BSEARCH_CMP_FN(const EVP_PKEY_ASN1_METHOD *,
 int EVP_PKEY_asn1_get_count(void)
 {
     int num = OSSL_NELEM(standard_methods);
-    if (app_methods)
-        num += sk_EVP_PKEY_ASN1_METHOD_num(app_methods);
+
+    /*
+     * This function doesn't really have an error state, but if we can't
+     * initialise locks, it's safe to pretend there are no app methods.
+     */
+    if (RUN_ONCE(&app_methods_init, do_app_methods_init)) {
+        CRYPTO_THREAD_read_lock(app_methods_lock);
+        if (app_methods)
+            num += sk_EVP_PKEY_ASN1_METHOD_num(app_methods);
+        CRYPTO_THREAD_unlock(app_methods_lock);
+    }
+
     return num;
 }
 
-const EVP_PKEY_ASN1_METHOD *EVP_PKEY_asn1_get0(int idx)
+static const EVP_PKEY_ASN1_METHOD *pkey_asn1_get0_unlocked(int idx)
 {
     int num = OSSL_NELEM(standard_methods);
+
     if (idx < 0)
         return NULL;
     if (idx < num)
@@ -52,17 +82,50 @@ const EVP_PKEY_ASN1_METHOD *EVP_PKEY_asn1_get0(int idx)
     return sk_EVP_PKEY_ASN1_METHOD_value(app_methods, idx);
 }
 
+const EVP_PKEY_ASN1_METHOD *EVP_PKEY_asn1_get0(int idx)
+{
+    /*
+     * Just as in EVP_PKEY_asn1_get_count(), if we can't init the app_methods
+     * lock, we pretend that there are no app_methods.
+     */
+    if (RUN_ONCE(&app_methods_init, do_app_methods_init)) {
+        const EVP_PKEY_ASN1_METHOD *ameth = NULL;
+
+        CRYPTO_THREAD_read_lock(app_methods_lock);
+        ameth = pkey_asn1_get0_unlocked(idx);
+        CRYPTO_THREAD_unlock(app_methods_lock);
+        return ameth;
+    }
+    return NULL;
+}
+
 static const EVP_PKEY_ASN1_METHOD *pkey_asn1_find(int type)
 {
     EVP_PKEY_ASN1_METHOD tmp;
     const EVP_PKEY_ASN1_METHOD *t = &tmp, **ret;
+
     tmp.pkey_id = type;
-    if (app_methods) {
-        int idx;
-        idx = sk_EVP_PKEY_ASN1_METHOD_find(app_methods, &tmp);
-        if (idx >= 0)
-            return sk_EVP_PKEY_ASN1_METHOD_value(app_methods, idx);
+
+    /*
+     * Just as in EVP_PKEY_asn1_get_count(), if we can't init the app_methods
+     * lock, we pretend that there are no app_methods.
+     */
+    if (RUN_ONCE(&app_methods_init, do_app_methods_init)) {
+        const EVP_PKEY_ASN1_METHOD *ameth = NULL;
+
+        CRYPTO_THREAD_read_lock(app_methods_lock);
+        if (app_methods != NULL) {
+            int idx;
+
+            idx = sk_EVP_PKEY_ASN1_METHOD_find(app_methods, &tmp);
+            if (idx >= 0)
+                ameth = sk_EVP_PKEY_ASN1_METHOD_value(app_methods, idx);
+        }
+        CRYPTO_THREAD_unlock(app_methods_lock);
+        if (ameth != NULL)
+            return ameth;
     }
+
     ret = OBJ_bsearch_ameth(&t, standard_methods, OSSL_NELEM(standard_methods));
     if (!ret || !*ret)
         return NULL;
@@ -105,6 +168,7 @@ const EVP_PKEY_ASN1_METHOD *EVP_PKEY_asn1_find_str(ENGINE **pe,
 {
     int i;
     const EVP_PKEY_ASN1_METHOD *ameth;
+
     if (len == -1)
         len = strlen(str);
     if (pe) {
@@ -124,28 +188,50 @@ const EVP_PKEY_ASN1_METHOD *EVP_PKEY_asn1_find_str(ENGINE **pe,
 #endif
         *pe = NULL;
     }
-    for (i = 0; i < EVP_PKEY_asn1_get_count(); i++) {
-        ameth = EVP_PKEY_asn1_get0(i);
-        if (ameth->pkey_flags & ASN1_PKEY_ALIAS)
-            continue;
-        if (((int)strlen(ameth->pem_str) == len)
-            && (strncasecmp(ameth->pem_str, str, len) == 0))
-            return ameth;
+
+    /*
+     * Just as in EVP_PKEY_asn1_get_count(), if we can't init the app_methods
+     * lock, we pretend that there are no app_methods.
+     */
+    if (RUN_ONCE(&app_methods_init, do_app_methods_init)) {
+        CRYPTO_THREAD_read_lock(app_methods_lock);
+        for (i = 0; i < EVP_PKEY_asn1_get_count(); i++) {
+            ameth = pkey_asn1_get0_unlocked(i);
+            if (ameth->pkey_flags & ASN1_PKEY_ALIAS)
+                continue;
+            if (((int)strlen(ameth->pem_str) == len)
+                && (strncasecmp(ameth->pem_str, str, len) == 0))
+                break;
+        }
+        CRYPTO_THREAD_unlock(app_methods_lock);
+        return ameth;
     }
     return NULL;
 }
 
 int EVP_PKEY_asn1_add0(const EVP_PKEY_ASN1_METHOD *ameth)
 {
+    int ret = 0;
+
+    if (!RUN_ONCE(&app_methods_init, do_app_methods_init)) {
+        EVPerr(EVP_F_EVP_PKEY_ASN1_ADD0, ERR_R_MALLOC_FAILURE);
+        return 0;
+    }
+
+    CRYPTO_THREAD_write_lock(app_methods_lock);
     if (app_methods == NULL) {
         app_methods = sk_EVP_PKEY_ASN1_METHOD_new(ameth_cmp);
         if (app_methods == NULL)
-            return 0;
+            goto err;
     }
     if (!sk_EVP_PKEY_ASN1_METHOD_push(app_methods, ameth))
-        return 0;
+        goto err;
     sk_EVP_PKEY_ASN1_METHOD_sort(app_methods);
-    return 1;
+
+    ret = 1;
+ err:
+    CRYPTO_THREAD_unlock(app_methods_lock);
+    return ret;
 }
 
 int EVP_PKEY_asn1_add_alias(int to, int from)

@@ -7,11 +7,14 @@
  * https://www.openssl.org/source/license.html
  */
 
+#include "crypto/bio/bio_lcl.h"
 #include "e_os.h"
 #include <stdio.h>
+#include <sys/socket.h>
 #include <openssl/objects.h>
 #include <openssl/rand.h>
 #include "ssl_locl.h"
+#include "ssl/record/record_locl.h"
 
 static void get_current_time(struct timeval *t);
 static int dtls1_handshake_write(SSL *s);
@@ -443,38 +446,18 @@ static void get_current_time(struct timeval *t)
 #define LISTEN_SEND_VERIFY_REQUEST  1
 
 #ifndef OPENSSL_NO_SOCK
-int DTLSv1_listen(SSL *s, BIO_ADDR *client)
+int DTLSv1_answerHello(SSL *s, BIO *rbio, BIO *wbio)
 {
-    int next, n, ret = 0, clearpkt = 0;
+    int next, n, clearpkt = 0;
+    BUF_MEM *bufm;
     unsigned char cookie[DTLS1_COOKIE_LENGTH];
     unsigned char seq[SEQ_NUM_SIZE];
-    const unsigned char *data;
     unsigned char *buf;
+    BIO_ADDR *tmpclient = NULL;
+    const unsigned char *data;
     size_t fragoff, fraglen, msglen;
     unsigned int rectype, versmajor, msgseq, msgtype, clientvers, cookielen;
-    BIO *rbio, *wbio;
-    BUF_MEM *bufm;
-    BIO_ADDR *tmpclient = NULL;
     PACKET pkt, msgpkt, msgpayload, session, cookiepkt;
-
-    if (s->handshake_func == NULL) {
-        /* Not properly initialized yet */
-        SSL_set_accept_state(s);
-    }
-
-    /* Ensure there is no state left over from a previous invocation */
-    if (!SSL_clear(s))
-        return -1;
-
-    ERR_clear_error();
-
-    rbio = SSL_get_rbio(s);
-    wbio = SSL_get_wbio(s);
-
-    if (!rbio || !wbio) {
-        SSLerr(SSL_F_DTLSV1_LISTEN, SSL_R_BIO_NOT_SET);
-        return -1;
-    }
 
     /*
      * We only peek at incoming ClientHello's until we're sure we are going to
@@ -532,9 +515,15 @@ int DTLSv1_listen(SSL *s, BIO_ADDR *client)
             return -1;
         }
 
-        /* If we hit any problems we need to clear this packet from the BIO */
-        clearpkt = 1;
+        /* tell caller size of data in s->init_buf->data */
+        s->init_num = n;
 
+        /*
+         * after this point, if we hit any problems we need to clear this packet
+         * from the BIO, because it was PEEK'ed at the socket level.
+         * if there are no problems, it is left in the socket for SSL_accept().
+         */
+        clearpkt = 1;
         if (!PACKET_buf_init(&pkt, buf, n)) {
             SSLerr(SSL_F_DTLSV1_LISTEN, ERR_R_INTERNAL_ERROR);
             return -1;
@@ -815,6 +804,7 @@ int DTLSv1_listen(SSL *s, BIO_ADDR *client)
             tmpclient = NULL;
 
             /* TODO(size_t): convert this call */
+
             if (BIO_write(wbio, buf, wreclen) < (int)wreclen) {
                 if (BIO_should_retry(wbio)) {
                     /*
@@ -838,6 +828,45 @@ int DTLSv1_listen(SSL *s, BIO_ADDR *client)
             }
         }
     } while (next != LISTEN_SUCCESS);
+
+    return 1;
+
+ end:
+    if (clearpkt) {
+        /* Dump this packet. Ignore return value */
+        BIO_read(rbio, buf, SSL3_RT_MAX_PLAIN_LENGTH);
+    }
+    return 0;
+}
+
+int DTLSv1_listen(SSL *s, BIO_ADDR *client)
+{
+    int ret = 0;
+    unsigned char seq[SEQ_NUM_SIZE];
+    BIO *rbio, *wbio;
+
+    if (s->handshake_func == NULL) {
+        /* Not properly initialized yet */
+        SSL_set_accept_state(s);
+    }
+
+    /* Ensure there is no state left over from a previous invocation */
+    if (!SSL_clear(s))
+        return -1;
+
+    ERR_clear_error();
+
+    rbio = SSL_get_rbio(s);
+    wbio = SSL_get_wbio(s);
+
+    if (!rbio || !wbio) {
+        SSLerr(SSL_F_DTLSV1_LISTEN, SSL_R_BIO_NOT_SET);
+        return -1;
+    }
+
+    if((ret = DTLSv1_answerHello(s, rbio, wbio)) != 1) {
+      goto end;
+    }
 
     /*
      * Set expected sequence numbers to continue the handshake.
@@ -866,14 +895,156 @@ int DTLSv1_listen(SSL *s, BIO_ADDR *client)
         BIO_ADDR_clear(client);
 
     ret = 1;
-    clearpkt = 0;
+
  end:
-    BIO_ADDR_free(tmpclient);
     BIO_ctrl(SSL_get_rbio(s), BIO_CTRL_DGRAM_SET_PEEK_MODE, 0, NULL);
-    if (clearpkt) {
-        /* Dump this packet. Ignore return value */
-        BIO_read(rbio, buf, SSL3_RT_MAX_PLAIN_LENGTH);
+    return ret;
+}
+
+/*
+ * this function should be called by an application expecting a number
+ * of DTLS connections (such as a COAPS server).
+ *
+ * The "serv" SSL structure should contain a BIO with an unconnected socket
+ * which MAY be bound to a specific address (or may be IPv6 with mapped IPv4
+ * address).  Connections will be accepted on this socket, and will checked
+ * for the helloVerify cookie. Ones without will be sent a HelloVerifyRequest.
+ *
+ * All packets in the socket will be processed until one is found with a valid
+ * cookie.  Once that is found, it will be processed into the "connection"
+ * SSL context, but no reply will be generated until SSL_accept() is called
+ * on the next context.
+ *
+ * This should be done *after* creating the application creates a
+ * new socket on which to reply, which should be bind(2)ed and connect(2)ed
+ * to the client based upon BIO_dgram_get_peer/BIO_dgram_get_addr.
+ *
+ */
+int DTLSv1_accept(SSL *serv, SSL *connection, BIO_ADDR *client)
+{
+    int ret = 0;
+    unsigned char seq[SEQ_NUM_SIZE];
+    BIO_ADDR     *ouraddr;
+    BIO *rbio,   *wbio;
+    BIO *rbio_c, *wbio_c;
+    SSL3_BUFFER *rb;
+    int  rfd = -1, wfd = -1;
+
+    ouraddr = BIO_ADDR_new();
+    if(ouraddr == NULL) goto end;
+
+    if (serv->handshake_func == NULL) {
+        /* Not properly initialized yet */
+        SSL_set_accept_state(serv);
     }
+
+    /* Ensure there is no state left over from a previous invocation */
+    if (!SSL_clear(serv))
+        return -1;
+
+    ERR_clear_error();
+
+    rbio = SSL_get_rbio(serv);
+    wbio = SSL_get_wbio(serv);
+
+    if (!rbio || !wbio) {
+        SSLerr(SSL_F_DTLSV1_LISTEN, SSL_R_BIO_NOT_SET);
+        return -1;
+    }
+
+    if((ret = DTLSv1_answerHello(serv, rbio, wbio)) != 1) {
+      goto end;
+    }
+
+    /* At this point, there is a real ClientHello in s->init_buf */
+
+    /*
+     * We need to move the init_buf over to connection, set up
+     * a new socket, and then call SSL_accept() on the new SSL
+     */
+    rb = &connection->rlayer.rbuf;
+    if (rb->buf == NULL) {
+      if (!ssl3_setup_read_buffer(connection)) {
+          goto end;
+      }
+    }
+
+    memcpy(rb->buf, serv->init_buf, serv->init_num);
+    rb->offset = 0;
+    rb->left   = serv->init_num;
+
+    BIO_ctrl(SSL_get_rbio(serv), BIO_CTRL_DGRAM_SET_PEEK_MODE, 0, NULL);
+
+    /*
+     * Set expected sequence numbers to continue the handshake.
+     */
+    SSL_set_accept_state(connection);
+    connection->d1->handshake_read_seq = 1;
+    connection->d1->handshake_write_seq = 1;
+    connection->d1->next_handshake_write_seq = 1;
+    DTLS_RECORD_LAYER_set_write_sequence(&connection->rlayer, seq);
+
+    /*
+     * We are doing cookie exchange, so make sure we set that option in the
+     * SSL object
+     */
+    SSL_set_options(connection, SSL_OP_COOKIE_EXCHANGE);
+
+    /*
+     * Tell the state machine that we've done the initial hello verify
+     * exchange
+     */
+    ossl_statem_set_hello_verify_done(connection);
+
+    /*
+     * now set up a socket based upon the original rbio's peer/addr
+     */
+    /* see if there an FD burried in the rbio */
+    rbio_c = SSL_get_rbio(connection);
+    wbio_c = SSL_get_wbio(connection);
+    if(rbio_c) {
+      rfd    = BIO_get_fd(rbio_c, NULL);
+    }
+    if(wbio_c) {
+      wfd    = BIO_get_fd(wbio_c, NULL);
+    }
+
+    /* dig the address peers out of s */
+    if (BIO_dgram_get_peer(rbio, client) <= 0)
+      goto end;
+
+    if (BIO_dgram_get_addr(rbio, ouraddr) <= 0)
+      goto end;
+
+    if(rfd == -1 || wfd == -1) {
+      int socket_type = SOCK_DGRAM;
+      int family      = BIO_ADDR_family(client);
+      int protocol    = 0;  /* UDP has nothing here */
+      int one         = 1;
+
+      rfd = socket(family, socket_type, protocol);
+      if(setsockopt(rfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != 0) {
+        goto end;
+      }
+      wfd = rfd;
+    }
+
+    if(bind(rfd,BIO_ADDR_sockaddr(ouraddr),BIO_ADDR_sockaddr_size(ouraddr)) != 0){
+      goto end;
+    }
+    if(connect(rfd,BIO_ADDR_sockaddr(client),BIO_ADDR_sockaddr_size(client)) != 0) {
+      goto end;
+    }
+
+    SSL_set_fd(connection, rfd);
+
+    ret = 1;
+
+ end:
+    if(ouraddr) {
+      BIO_ADDR_free(ouraddr);
+    }
+    BIO_ctrl(SSL_get_rbio(serv), BIO_CTRL_DGRAM_SET_PEEK_MODE, 0, NULL);
     return ret;
 }
 #endif

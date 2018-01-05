@@ -16,6 +16,7 @@
 #  include <stdio.h>
 # endif
 # include <stdarg.h>
+#include <sys/socket.h>
 
 # include <openssl/crypto.h>
 # include <openssl/bioerr.h>
@@ -144,6 +145,8 @@ extern "C" {
 # endif
 
 # define BIO_CTRL_DGRAM_SET_PEEK_MODE      71
+# define BIO_CTRL_DGRAM_GET_ADDR           72 /* address data sent to/from */
+# define BIO_CTRL_DGRAM_SET_ADDR           73 /* address data sent to/from */
 
 /* modifiers */
 # define BIO_FP_READ             0x02
@@ -524,6 +527,10 @@ int BIO_ctrl_reset_read_request(BIO *b);
          (int)BIO_ctrl(b, BIO_CTRL_DGRAM_GET_PEER, 0, (char *)(peer))
 # define BIO_dgram_set_peer(b,peer) \
          (int)BIO_ctrl(b, BIO_CTRL_DGRAM_SET_PEER, 0, (char *)(peer))
+# define BIO_dgram_get_addr(b,addr) \
+         (int)BIO_ctrl(b, BIO_CTRL_DGRAM_GET_ADDR, 0, (char *)(addr))
+# define BIO_dgram_set_addr(b,addr) \
+         (int)BIO_ctrl(b, BIO_CTRL_DGRAM_SET_ADDR, 0, (char *)(addr))
 # define BIO_dgram_get_mtu_overhead(b) \
          (unsigned int)BIO_ctrl((b), BIO_CTRL_DGRAM_GET_MTU_OVERHEAD, 0, NULL)
 
@@ -651,6 +658,8 @@ void BIO_ADDR_free(BIO_ADDR *);
 void BIO_ADDR_clear(BIO_ADDR *ap);
 int BIO_ADDR_family(const BIO_ADDR *ap);
 int BIO_ADDR_rawaddress(const BIO_ADDR *ap, void *p, size_t *l);
+const struct sockaddr *BIO_ADDR_sockaddr(const BIO_ADDR *ap);
+socklen_t BIO_ADDR_sockaddr_size(const BIO_ADDR *ap);
 unsigned short BIO_ADDR_rawport(const BIO_ADDR *ap);
 char *BIO_ADDR_hostname_string(const BIO_ADDR *ap, int numeric);
 char *BIO_ADDR_service_string(const BIO_ADDR *ap, int numeric);

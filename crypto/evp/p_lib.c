@@ -1010,7 +1010,7 @@ int EVP_PKEY_get_default_digest_name(EVP_PKEY *pkey,
                                              mdmandatory,
                                              sizeof(mdmandatory));
         params[2] = OSSL_PARAM_construct_end();
-        if (!evp_keymgmt_get_params(pkey->keymgmt, pkey->keydata, params))
+        if (!EVP_PKEY_get_params(pkey, params))
             return 0;
         if (mdmandatory[0] != '\0') {
             OPENSSL_strlcpy(mdname, mdmandatory, mdname_sz);
@@ -1349,6 +1349,20 @@ int EVP_PKEY_size(const EVP_PKEY *pkey)
     return size;
 }
 
+int EVP_PKEY_get_params(EVP_PKEY *pkey, OSSL_PARAM *params)
+{
+    if (pkey != NULL && pkey->keymgmt != NULL && pkey->keydata != NULL)
+        return evp_keymgmt_get_params(pkey->keymgmt, pkey->keydata, params);
+    return 0;
+}
+
+const OSSL_PARAM *EVP_PKEY_gettable_params(EVP_PKEY *pkey)
+{
+    if (pkey != NULL && pkey->keymgmt != NULL)
+        return evp_keymgmt_gettable_params(pkey->keymgmt);
+    return 0;
+}
+
 void *evp_pkey_export_to_provider(EVP_PKEY *pk, OPENSSL_CTX *libctx,
                                   EVP_KEYMGMT **keymgmt,
                                   const char *propquery)
@@ -1579,15 +1593,6 @@ int evp_pkey_downgrade(EVP_PKEY *pk)
     return 0;     /* No downgrade, but at least the key is restored */
 }
 #endif  /* FIPS_MODE */
-
-const OSSL_PARAM *EVP_PKEY_gettable_params(EVP_PKEY *pkey)
-{
-    if (pkey == NULL
-        || pkey->keymgmt == NULL
-        || pkey->keydata == NULL)
-        return 0;
-    return evp_keymgmt_gettable_params(pkey->keymgmt);
-}
 
 /*
  * For the following methods param->return_size is set to a value

@@ -449,6 +449,7 @@ my @disablables = (
     "idea",
     "ktls",
     "legacy",
+    "lto",
     "makedepend",
     "md2",
     "md4",
@@ -1742,6 +1743,17 @@ unless ($disabled{ktls}) {
         }
     } else {
         disable('not-linux-or-freebsd', 'ktls');
+    }
+}
+
+unless ($disabled{lto}) {
+    $config{lto}="";
+	 if ($predefined_C{__GNUC__} >= 8 &&
+		 $predefined_CXX{__GNUC__} >= 8) {
+		 push @{$config{cflags}}, "-flto";
+		 push @{$config{cxxflags}}, "-flto";
+    } else {
+        disable('not-gcc-8+', 'lto');
     }
 }
 

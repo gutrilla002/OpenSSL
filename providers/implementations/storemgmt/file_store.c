@@ -628,7 +628,7 @@ static int file_name_check(struct file_ctx_st *ctx, const char *name)
 
     /*
      * If we've reached the end of the string at this point, we've successfully
-     * found a fitting file name.
+     * found a fitting filename.
      */
     return *p == '\0';
 }

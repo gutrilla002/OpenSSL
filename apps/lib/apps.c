@@ -3343,7 +3343,7 @@ EVP_PKEY *app_paramgen(EVP_PKEY_CTX *ctx, const char *alg)
 }
 
 /*
- * Return non-zero if the legacy path is still an option.
+ * Return nonzero if the legacy path is still an option.
  * This decision is based on the global command line operations and the
  * behaviour thus far.
  */

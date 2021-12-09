@@ -395,7 +395,7 @@ char **opt_rest(void);
 int opt_num_rest(void);
 int opt_check_rest_arg(const char *expected);
 
-/* Returns non-zero if legacy paths are still available */
+/* Returns nonzero if legacy paths are still available */
 int opt_legacy_okay(void);
 
 

@@ -14,7 +14,36 @@
 #include <stdio.h>
 #include <errno.h>
 
+/* this is needed on Linux to get in6_pktinfo to be defined */
+#ifndef __USE_GNU
+# define __USE_GNU
+#endif
+
+/* this is needed on OSX to get IPV6_PKTINFO defined */
+#ifdef __APPLE__
+# define __APPLE_USE_RFC_3542
+#endif
+
+#include <sys/types.h>
+#if defined(_WIN32)
+# include <winsock2.h>
+# include <ws2tcpip.h>
+#else
+# include <sys/socket.h>
+# include <netinet/in.h>
+# if defined OPENSSL_USE_IPV6
+#  if defined OPENSSL_SYS_WINDOWS
+#   include <shared/netiodef.h>
+#  else
+#   include <netinet/ip6.h>
+#  endif
+# endif
+#endif
+#include <errno.h>
+#include <signal.h>
+
 #include "bio_local.h"
+
 #ifndef OPENSSL_NO_DGRAM
 
 # ifndef OPENSSL_NO_SCTP
@@ -28,7 +57,7 @@
 #  define IP_MTU      14        /* linux is lame */
 # endif
 
-# if OPENSSL_USE_IPV6 && !defined(IPPROTO_IPV6)
+# if defined OPENSSL_USE_IPV6 && !defined(IPPROTO_IPV6)
 #  define IPPROTO_IPV6 41       /* windows is lame */
 # endif
 
@@ -42,6 +71,21 @@
          ((a)->s6_addr32[2] == htonl(0x0000ffff)))
 # endif
 
+/* this is needed on OSX to get IPV6_PKTINFO */
+#if defined(HAVE_IP_PKTINFO) || defined(HAVE_IP_RECVDSTADDR)
+# ifdef __APPLE__
+/* should be big enough */
+#  define BIO_CMSG_ADDR_SIZE 256
+#  define BIO_CMSG_PKT_SIZE  256
+#  define BIO_CMSG_PKT6_SIZE 256
+# else
+#  define BIO_CMSG_ADDR_SIZE CMSG_SPACE(sizeof(struct in_addr))
+#  define BIO_CMSG_PKT_SIZE  CMSG_SPACE(sizeof(struct in_pktinfo))
+#  define BIO_CMSG_PKT6_SIZE CMSG_SPACE(sizeof(struct in6_pktinfo))
+# endif
+#endif
+
+
 static int dgram_write(BIO *h, const char *buf, int num);
 static int dgram_read(BIO *h, char *buf, int size);
 static int dgram_puts(BIO *h, const char *str);
@@ -49,6 +93,7 @@ static long dgram_ctrl(BIO *h, int cmd, long arg1, void *arg2);
 static int dgram_new(BIO *h);
 static int dgram_free(BIO *data);
 static int dgram_clear(BIO *bio);
+static int dgram_get_sockname(BIO *bio);
 
 # ifndef OPENSSL_NO_SCTP
 static int dgram_sctp_write(BIO *h, const char *buf, int num);
@@ -103,6 +148,7 @@ static const BIO_METHOD methods_dgramp_sctp = {
 
 typedef struct bio_dgram_data_st {
     BIO_ADDR peer;
+    BIO_ADDR addr;
     unsigned int connected;
     unsigned int _errno;
     unsigned int mtu;
@@ -290,6 +336,221 @@ static void dgram_reset_rcv_timeout(BIO *b)
 # endif
 }
 
+static int dgram_read_unconnected_v4(BIO *b, char *in, int inl,
+                                     int flags,
+                                     BIO_ADDR *dstaddr, BIO_ADDR *peer)
+{
+    int len = 0;
+    /*
+     * RFC2292 says CMSG_SPACE is guaranteed to evaluate to a constant,
+     * but OSX Darwin manages to generate warnings about it anyway.
+     */
+    unsigned char chdr[BIO_CMSG_ADDR_SIZE];
+#if defined(HAVE_IP_PKTINFO) || defined(HAVE_IP_RECVDSTADDR)
+    struct iovec iov;
+    struct msghdr mhdr;
+    struct cmsghdr *cmsg;
+    int val;
+#if defined(HAVE_IP_PKTINFO)
+    /* LINUX has IP_PKTINFO for IPv4 */
+    struct in_pktinfo *pkt_info = NULL;
+
+#elif defined(HAVE_IP_RECVDSTADDR)
+/* FREEBSD, DragonFly, NetBSD, OpenBSD, probably BSDi */
+/*    implies IP_SENDSRCADDR is available too         */
+
+    struct in_addr *dstrecv;
+    struct cmsghdr *cmsg;
+#else
+    struct sockaddr_in addr;
+    unsigned int ret;
+
+    len = sizeof(addr);
+    memset((void *)&addr, 0, sizeof(addr));
+    ret = recvfrom(b->num, in, inl, flags, (struct sockaddr *)&addr, &len);
+
+    if(ret > 0) {
+      /* successs! */
+      BIO_set_dgram_origin(b, &addr);
+    }
+    return ret;
+#endif
+
+
+#if defined(HAVE_IP_PKTINFO) || defined(HAVE_IP_RECVDSTADDR)
+# if defined(HAVE_IP_PKTINFO)
+    /* enable PKTINFO receive */
+    val = 1;
+    if(setsockopt(b->num, IPPROTO_IP, IP_PKTINFO, &val, sizeof(val)) < 0)
+        return -1;
+
+# elif defined(HAVE_IP_RECVDSTADDR)
+    /* enable RECVDSTADDR receive */
+    val = 1;
+    /* XXX should be cached to avoid a syscall */
+    if(setsockopt(b->num, IPPROTO_IP, IP_RECVDSTADDR, &val, sizeof(val)) < 0) {
+      return -1;
+    }
+# endif
+
+    memset(&iov, 0, sizeof(iov));
+    iov.iov_len = inl;
+    iov.iov_base = (caddr_t) in;
+
+    memset(&mhdr, 0, sizeof(mhdr));
+    mhdr.msg_name = (caddr_t)BIO_ADDR_sockaddr(peer);
+    mhdr.msg_namelen = sizeof(struct sockaddr_in);
+    mhdr.msg_iov = &iov;
+    mhdr.msg_iovlen = 1;
+
+    if(dstaddr != NULL) {
+      memset(chdr, 0, sizeof(chdr));
+      cmsg = (struct cmsghdr *)chdr;
+      mhdr.msg_control = (void *)cmsg;
+      mhdr.msg_controllen = sizeof(chdr);
+    }
+
+    if((len = recvmsg(b->num, &mhdr, 0)) >= 0 && dstaddr != NULL) {
+        for (cmsg = CMSG_FIRSTHDR(&mhdr);
+             cmsg != NULL;
+             cmsg = CMSG_NXTHDR(&mhdr, cmsg)) {
+          if(cmsg->cmsg_level != IPPROTO_IP)
+            continue;
+
+          if(cmsg->cmsg_type != IP_PKTINFO)
+            continue;
+
+          pkt_info = (struct in_pktinfo *)CMSG_DATA(cmsg);
+          break;
+	}
+
+        /* see if we found something */
+        if(pkt_info != NULL) {
+          dstaddr->s_in.sin_family = AF_INET;
+# if defined(HAVE_IP_PKTINFO)
+          dstaddr->s_in.sin_addr = pkt_info->ipi_addr;
+# elif defined(HAVE_IP_RECVDSTADDR)
+          dstaddr->s_in.sin_addr =*dstrecv;
+# endif
+        }
+    }
+
+    /* NOTE: peer was filled in by kernel */
+    return len;
+#endif  /* defined(HAVE_IP_PKTINFO) || defined(HAVE_IP_RECVDSTADDR) */
+}
+
+#else
+static int dgram_read_unconnected_v4(BIO *b, char *in, int inl,
+                                         int flags,
+                                         BIO_ADDR *dstaddr, BIO_ADDR *peer)
+{
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    unsigned int ret;
+
+    memset((void *)&addr, 0, sizeof(addr));
+    ret = recvfrom(b->num, in, inl, flags, (struct sockaddr *)&addr, &len);
+
+    if(ret > 0) {
+      /* successs! */
+      BIO_set_dgram_origin(b, &addr);
+    }
+    return ret;
+}
+#endif
+
+/*
+ * on Windows, RFC3542 is not implemented correctly:
+ *   WSARecvMsg must be used rather than recvmsg,
+ *   so the stock recvfrom() code is used, thus !defined(_WIN32)
+ *
+ */
+#if defined OPENSSL_USE_IPV6
+# if !defined(_WIN32)
+static int dgram_read_unconnected_v6(BIO *b, char *in, int inl,
+                                     int flags,
+                                     BIO_ADDR *dstaddr, BIO_ADDR *peer)
+{
+    int len = 0;
+    unsigned char    chdr[BIO_CMSG_PKT6_SIZE];
+    struct iovec iov;
+    struct msghdr mhdr;
+    struct in6_pktinfo *pkt_info = NULL;
+    struct cmsghdr *cmsg;
+    int val;
+
+    /* enable PKTINFO receive */
+    val = 1;
+    if(setsockopt(b->num, IPPROTO_IPV6, IPV6_RECVPKTINFO, &val, sizeof(val)) < 0) {
+      return -1;
+    }
+
+    memset(&iov, 0, sizeof(iov));
+    iov.iov_len = inl;
+    iov.iov_base = (caddr_t) in;
+
+    memset(&mhdr, 0, sizeof(mhdr));
+    mhdr.msg_name = (caddr_t)BIO_ADDR_sockaddr(peer);
+    mhdr.msg_namelen = sizeof(struct sockaddr_in6);
+    mhdr.msg_iov = &iov;
+    mhdr.msg_iovlen = 1;
+
+    if(dstaddr != NULL) {
+      memset(chdr, 0, sizeof(chdr));
+      cmsg = (struct cmsghdr *)chdr;
+      mhdr.msg_control = (void *)cmsg;
+      mhdr.msg_controllen = sizeof(chdr);
+    }
+
+    if((len = recvmsg(b->num, &mhdr, 0)) >= 0) {
+      if(dstaddr != NULL) {
+        for (cmsg = CMSG_FIRSTHDR(&mhdr);
+             cmsg != NULL;
+             cmsg = CMSG_NXTHDR(&mhdr, cmsg)) {
+          if(cmsg->cmsg_level != IPPROTO_IPV6)
+            continue;
+
+          if(cmsg->cmsg_type != IPV6_PKTINFO)
+            continue;
+          pkt_info = (struct in6_pktinfo *)CMSG_DATA(cmsg);
+	}
+
+        /* see if we found something */
+        if(pkt_info != NULL) {
+          unsigned int dst_len = BIO_ADDR_sockaddr_size(dstaddr);
+          if(dst_len > sizeof(pkt_info->ipi6_addr)) dst_len = sizeof(pkt_info->ipi6_addr);
+          memcpy(BIO_ADDR_sockaddr_noconst(dstaddr), &pkt_info->ipi6_addr, dst_len);
+        }
+      }
+    }
+
+    /* NOTE: peer was filled in by kernel */
+    return len;
+}
+# else
+
+/* generic version for windows */
+static int dgram_read_unconnected_v6(BIO *b, char *in, int inl,
+                                         int flags,
+                                         BIO_ADDR *dstaddr, BIO_ADDR *peer)
+{
+    struct sockaddr_in6 addr;
+    socklen_t len = sizeof(addr);
+    unsigned int ret;
+
+    memset((void *)&addr, 0, sizeof(addr));
+    ret = recvfrom(b->num, in, inl, flags, (struct sockaddr *)&addr, &len);
+
+    if(ret > 0) {
+      /* successs! */
+      BIO_set_dgram_origin(b, &addr);
+    }
+    return ret;
+}
+# endif  /* WIN32 */
+#endif /* OPENSSL_USE_IPV6 */
+
 static int dgram_read(BIO *b, char *out, int outl)
 {
     int ret = 0;
@@ -297,19 +558,43 @@ static int dgram_read(BIO *b, char *out, int outl)
     int flags = 0;
 
     BIO_ADDR peer;
-    socklen_t len = sizeof(peer);
+    BIO_ADDR addr;
 
     if (out != NULL) {
+        struct sockaddr *sa;
+
+        /* make sure we know something about the socket */
+	if(data->addr.sa.sa_family == 0)
+          dgram_get_sockname(b);
+
+        sa = (struct sockaddr *)BIO_ADDR_sockaddr(&data->addr);
+
         clear_socket_error();
         memset(&peer, 0, sizeof(peer));
+        memset(&addr, 0, sizeof(addr));
         dgram_adjust_rcv_timeout(b);
         if (data->peekmode)
             flags = MSG_PEEK;
-        ret = recvfrom(b->num, out, outl, flags,
-                       BIO_ADDR_sockaddr_noconst(&peer), &len);
 
-        if (!data->connected && ret >= 0)
+        switch(sa->sa_family) {
+        case AF_INET:
+          ret = dgram_read_unconnected_v4(b, out, outl, flags, &addr, &peer);
+          break;
+
+#if defined OPENSSL_USE_IPV6
+        case AF_INET6:
+          ret = dgram_read_unconnected_v6(b, out, outl, flags, &addr, &peer);
+          break;
+#endif /* AF_INET6 */
+
+        default:
+          ret = -1;
+        }
+
+        if (!data->connected && ret >= 0) {
+            BIO_ctrl(b, BIO_CTRL_DGRAM_SET_ADDR, 0, &addr);
             BIO_ctrl(b, BIO_CTRL_DGRAM_SET_PEER, 0, &peer);
+        }
 
         BIO_clear_retry_flags(b);
         if (ret < 0) {
@@ -324,19 +609,201 @@ static int dgram_read(BIO *b, char *out, int outl)
     return ret;
 }
 
+#if defined(HAVE_IP_PKTINFO)
+/* LINUX has IP_PKTINFO for IPv4 */
+static int dgram_write_unconnected_v4(BIO *b, const char *out, int outl)
+{
+    struct sockaddr_in addr;
+    struct sockaddr_in *srcaddr;
+    struct msghdr mhdr;
+    struct cmsghdr *cmsg;
+    struct iovec iov;
+
+    char chdr[BIO_CMSG_PKT_SIZE];
+    bio_dgram_data *data = (bio_dgram_data *)b->ptr;
+
+    memset((void *)&addr, 0, sizeof(addr));
+    addr = *(struct sockaddr_in *)BIO_ADDR_sockaddr(&data->peer);
+
+    iov.iov_len = outl;
+    iov.iov_base = (caddr_t) out;
+
+    memset(&mhdr, 0, sizeof(mhdr));
+    mhdr.msg_name = (caddr_t)&addr;
+    mhdr.msg_namelen = sizeof(struct sockaddr_in);
+    mhdr.msg_iov = &iov;
+    mhdr.msg_iovlen = 1;
+
+    srcaddr = (struct sockaddr_in *)BIO_ADDR_sockaddr(&data->addr);
+    if(srcaddr != NULL && srcaddr->sin_addr.s_addr != 0) {
+      struct in_pktinfo *pkt_info;
+
+      memset(chdr, 0, sizeof(chdr));
+
+      mhdr.msg_control = (void *)chdr;
+      mhdr.msg_controllen = sizeof(chdr);
+
+      cmsg = CMSG_FIRSTHDR(&mhdr);
+      cmsg->cmsg_len = CMSG_LEN(sizeof(struct in_pktinfo));
+      cmsg->cmsg_level = IPPROTO_IP;
+      cmsg->cmsg_type = IP_PKTINFO;
+
+      pkt_info = (struct in_pktinfo *)CMSG_DATA(cmsg);
+      pkt_info->ipi_addr = srcaddr->sin_addr;
+      mhdr.msg_controllen = CMSG_SPACE(sizeof(struct in_pktinfo));
+    }
+
+    return sendmsg(b->num, &mhdr, 0);
+}
+#elif defined(HAVE_IP_RECVDSTADDR)
+/* FREEBSD, DragonFly, NetBSD, OpenBSD, probably BSDi */
+/*    implies IP_SENDSRCADDR is available too         */
+static int dgram_write_unconnected_v4(BIO *b, const char *out, int outl)
+{
+    struct sockaddr_in addr;
+    struct sockaddr_in *srcaddr;
+    struct in_addr *origaddr;
+    struct msghdr mhdr;
+    struct cmsghdr *cmsg;
+    struct iovec iov;
+    char chdr[BIO_CMSG_ADDR_SIZE];
+    bio_dgram_data *data = (bio_dgram_data *)b->ptr;
+
+    memset((void *)&addr, 0, sizeof(addr));
+    addr = *(struct sockaddr_in *)BIO_ADDR_sockaddr(&data->peer);
+
+    iov.iov_len = outl;
+    iov.iov_base = (caddr_t) out;
+
+    memset(&mhdr, 0, sizeof(mhdr));
+    mhdr.msg_name = (caddr_t)&addr;
+    mhdr.msg_namelen = sizeof(struct sockaddr_in);
+    mhdr.msg_iov = &iov;
+    mhdr.msg_iovlen = 1;
+
+    srcaddr = (struct sockaddr_in *)BIO_ADDR_sockaddr(&data->addr);
+    if(srcaddr != NULL && srcaddr->sin_addr.s_addr != 0) {
+      memset(chdr, 0, sizeof(chdr));
+
+      mhdr.msg_control = (void *)chdr;
+      mhdr.msg_controllen = sizeof(chdr);
+
+      cmsg = CMSG_FIRSTHDR(&mhdr);
+      cmsg->cmsg_len = CMSG_LEN(sizeof(*origaddr));
+      cmsg->cmsg_level = IPPROTO_IP;
+      cmsg->cmsg_type = IP_SENDSRCADDR;
+
+      origaddr = (struct in_addr *)CMSG_DATA(cmsg);
+      *origaddr = srcaddr->sin_addr;
+      mhdr.msg_controllen = CMSG_SPACE(sizeof(*origaddr));
+    }
+
+    return sendmsg(b->num, &mhdr, 0);
+}
+#else
+
+/*
+ * this version send things with sendto(3), which is unable to
+ * set the originating address at all.
+ */
+static int dgram_write_unconnected_v4(BIO *b, const char *out, int outl)
+{
+    struct sockaddr_in addr;
+    bio_dgram_data *data = (bio_dgram_data *)b->ptr;
+
+    memset((void *)&addr, 0, sizeof(addr));
+    addr = *(struct sockaddr_in *)BIO_ADDR_sockaddr(&data->peer);
+
+    return sendto(b->num, out, outl, 0 /* flags */,
+                  (struct sockaddr *)&addr, sizeof(addr));
+}
+#endif
+
+#if defined OPENSSL_USE_IPV6
+# if !defined(_WIN32)
+static int dgram_write_unconnected_v6(BIO *b, const char *out, int outl)
+{
+    struct sockaddr_in6 addr;
+    struct sockaddr_in6 *srcaddr;
+    struct msghdr mhdr;
+    struct cmsghdr *cmsg;
+    struct iovec iov;
+    char chdr[BIO_CMSG_PKT6_SIZE];
+    bio_dgram_data *data = (bio_dgram_data *)b->ptr;
+
+    memset((void *)&addr, 0, sizeof(addr));
+    addr = *(struct sockaddr_in6 *)BIO_ADDR_sockaddr(&data->peer);
+
+    iov.iov_len = outl;
+    iov.iov_base = (caddr_t) out;
+
+    memset(&mhdr, 0, sizeof(mhdr));
+    mhdr.msg_name = (caddr_t)&addr;
+    mhdr.msg_namelen = sizeof(struct sockaddr_in6);
+    mhdr.msg_iov = &iov;
+    mhdr.msg_iovlen = 1;
+
+    srcaddr = (struct sockaddr_in6 *)BIO_ADDR_sockaddr(&data->addr);
+    if(srcaddr) {
+      struct in6_pktinfo *pkt_info;
+      memset(chdr, 0, sizeof(chdr));
+      cmsg = (struct cmsghdr *) chdr;
+
+      cmsg->cmsg_len = CMSG_LEN(sizeof(struct in6_pktinfo));
+      cmsg->cmsg_level = IPPROTO_IPV6;
+      cmsg->cmsg_type = IPV6_PKTINFO;
+
+      pkt_info = (struct in6_pktinfo *)CMSG_DATA(cmsg);
+      pkt_info->ipi6_addr = srcaddr->sin6_addr;
+      mhdr.msg_control = (void *) cmsg;
+      mhdr.msg_controllen = sizeof(chdr);
+    }
+
+    return sendmsg(b->num, &mhdr, 0);
+}
+# else /* _WIN32 */
+static int dgram_write_unconnected_v6(BIO *b, const char *out, int outl)
+{
+    struct sockaddr_in6 addr;
+    bio_dgram_data *data = (bio_dgram_data *)b->ptr;
+
+    memset((void *)&addr, 0, sizeof(addr));
+    addr = *(struct sockaddr_in6 *)BIO_ADDR_sockaddr(&data->peer);
+
+    return sendto(b->num, out, outl, 0 /* flags */,
+                  (struct sockaddr *)&addr, sizeof(addr));
+}
+# endif /* AF_INET6 */
+#endif  /* OPENSSL_USE_IPV6 */
+
 static int dgram_write(BIO *b, const char *in, int inl)
 {
     int ret;
     bio_dgram_data *data = (bio_dgram_data *)b->ptr;
+
     clear_socket_error();
 
     if (data->connected)
         ret = writesocket(b->num, in, inl);
     else {
-        int peerlen = BIO_ADDR_sockaddr_size(&data->peer);
+        struct sockaddr *sa = (struct sockaddr *)BIO_ADDR_sockaddr(&data->peer);
+	if(data->addr.sa.sa_family == 0)
+          dgram_get_sockname(b);
 
-        ret = sendto(b->num, in, inl, 0,
-                     BIO_ADDR_sockaddr(&data->peer), peerlen);
+        switch(sa->sa_family) {
+        case AF_INET:
+          ret = dgram_write_unconnected_v4(b, in, inl);
+          break;
+
+#if defined OPENSSL_USE_IPV6
+        case AF_INET6:
+          ret = dgram_write_unconnected_v6(b, in, inl);
+          break;
+#endif /* AF_INET6 */
+
+        default:
+          ret = -1;
+        }
     }
 
     BIO_clear_retry_flags(b);
@@ -349,6 +816,7 @@ static int dgram_write(BIO *b, const char *in, int inl)
     return ret;
 }
 
+
 static long dgram_get_mtu_overhead(bio_dgram_data *data)
 {
     long ret;
@@ -360,7 +828,7 @@ static long dgram_get_mtu_overhead(bio_dgram_data *data)
          */
         ret = 28;
         break;
-# if OPENSSL_USE_IPV6
+# if defined OPENSSL_USE_IPV6
     case AF_INET6:
         {
 #  ifdef IN6_IS_ADDR_V4MAPPED
@@ -386,6 +854,17 @@ static long dgram_get_mtu_overhead(bio_dgram_data *data)
         break;
     }
     return ret;
+}
+
+static int dgram_get_sockname(BIO *b)
+{
+    bio_dgram_data *data = (bio_dgram_data *)b->ptr;
+    socklen_t addr_len = sizeof(bio_dgram_data);
+
+    if (getsockname(b->num, (struct sockaddr *)&data->addr, &addr_len) < 0) {
+	return 0;
+    }
+    return addr_len;
 }
 
 static long dgram_ctrl(BIO *b, int cmd, long num, void *ptr)
@@ -460,7 +939,7 @@ static long dgram_ctrl(BIO *b, int cmd, long num, void *ptr)
                                   &sockopt_val, sizeof(sockopt_val))) < 0)
                 perror("setsockopt");
             break;
-#  if OPENSSL_USE_IPV6 && defined(IPV6_MTU_DISCOVER) && defined(IPV6_PMTUDISC_DO)
+#  if defined OPENSSL_USE_IPV6 && defined(IPV6_MTU_DISCOVER) && defined(IPV6_PMTUDISC_DO)
         case AF_INET6:
             sockopt_val = IPV6_PMTUDISC_DO;
             if ((ret = setsockopt(b->num, IPPROTO_IPV6, IPV6_MTU_DISCOVER,
@@ -500,7 +979,7 @@ static long dgram_ctrl(BIO *b, int cmd, long num, void *ptr)
                 ret = data->mtu;
             }
             break;
-#  if OPENSSL_USE_IPV6 && defined(IPV6_MTU)
+#  if defined OPENSSL_USE_IPV6 && defined(IPV6_MTU)
         case AF_INET6:
             if ((ret =
                  getsockopt(b->num, IPPROTO_IPV6, IPV6_MTU,
@@ -531,7 +1010,7 @@ static long dgram_ctrl(BIO *b, int cmd, long num, void *ptr)
         case AF_INET:
             ret += 576;
             break;
-# if OPENSSL_USE_IPV6
+# if defined OPENSSL_USE_IPV6
         case AF_INET6:
             {
 #  ifdef IN6_IS_ADDR_V4MAPPED
@@ -573,9 +1052,26 @@ static long dgram_ctrl(BIO *b, int cmd, long num, void *ptr)
             num = ret;
         memcpy(ptr, &data->peer, (ret = num));
         break;
+
     case BIO_CTRL_DGRAM_SET_PEER:
         BIO_ADDR_make(&data->peer, BIO_ADDR_sockaddr((BIO_ADDR *)ptr));
         break;
+
+    case BIO_CTRL_DGRAM_GET_ADDR:
+        ret = BIO_ADDR_sockaddr_size(&data->addr);
+	if(ret == 0) /* never set, retrieve it */
+          ret = dgram_get_sockname(b);
+
+        /* FIXME: if num < ret, we will only return part of an address.
+           That should bee an error, no? */
+        if (num == 0 || num > ret)
+            num = ret;
+        memcpy(ptr, &data->addr, (ret = num));
+        break;
+    case BIO_CTRL_DGRAM_SET_ADDR:
+        BIO_ADDR_make(&data->addr, BIO_ADDR_sockaddr((BIO_ADDR *)ptr));
+        break;
+
     case BIO_CTRL_DGRAM_SET_NEXT_TIMEOUT:
         memcpy(&(data->next_timeout), ptr, sizeof(struct timeval));
         break;
@@ -733,7 +1229,7 @@ static long dgram_ctrl(BIO *b, int cmd, long num, void *ptr)
             ret = -1;
 # endif
             break;
-# if OPENSSL_USE_IPV6
+# if defined OPENSSL_USE_IPV6
         case AF_INET6:
 #  if defined(IPV6_DONTFRAG)
             if ((ret = setsockopt(b->num, IPPROTO_IPV6, IPV6_DONTFRAG,

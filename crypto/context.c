@@ -32,6 +32,7 @@ struct ossl_lib_ctx_st {
     void *provider_conf;
     void *bio_core;
     void *child_provider;
+    void *lb_strategy;
     OSSL_METHOD_STORE *decoder_store;
     OSSL_METHOD_STORE *encoder_store;
     OSSL_METHOD_STORE *store_loader_store;
@@ -47,6 +48,7 @@ struct ossl_lib_ctx_st {
 #endif
 
     unsigned int ischild:1;
+    unsigned int isloadbalancer:1;
 };
 
 int ossl_lib_ctx_write_lock(OSSL_LIB_CTX *ctx)
@@ -71,6 +73,15 @@ int ossl_lib_ctx_is_child(OSSL_LIB_CTX *ctx)
     if (ctx == NULL)
         return 0;
     return ctx->ischild;
+}
+
+int ossl_lib_ctx_is_load_balancer(OSSL_LIB_CTX *ctx)
+{
+    ctx = ossl_lib_ctx_get_concrete(ctx);
+
+    if (ctx == NULL)
+        return 0;
+    return ctx->isloadbalancer;
 }
 
 static void context_deinit_objs(OSSL_LIB_CTX *ctx);
@@ -184,6 +195,9 @@ static int context_init(OSSL_LIB_CTX *ctx)
 #ifndef FIPS_MODULE
     ctx->child_provider = ossl_child_prov_ctx_new(ctx);
     if (ctx->child_provider == NULL)
+        goto err;
+    ctx->lb_strategy = ossl_lb_strategy_ctx_new(ctx);
+    if (ctx->lb_strategy == NULL)
         goto err;
 #endif
 
@@ -321,6 +335,10 @@ static void context_deinit_objs(OSSL_LIB_CTX *ctx)
         ossl_child_prov_ctx_free(ctx->child_provider);
         ctx->child_provider = NULL;
     }
+    if (ctx->lb_strategy != NULL) {
+        ossl_lb_strategy_ctx_free(ctx->lb_strategy);
+        ctx->lb_strategy = NULL;
+    }
 #endif
 }
 
@@ -428,6 +446,24 @@ OSSL_LIB_CTX *OSSL_LIB_CTX_new_child(const OSSL_CORE_HANDLE *handle,
         return NULL;
     }
     ctx->ischild = 1;
+
+    return ctx;
+}
+
+OSSL_LIB_CTX *OSSL_LIB_CTX_new_load_balancer(const OSSL_CORE_HANDLE *handle,
+                                             const OSSL_DISPATCH *in,
+                                             int strategy)
+{
+    OSSL_LIB_CTX *ctx = OSSL_LIB_CTX_new_child(handle, in);
+
+    if (ctx == NULL)
+        return NULL;
+
+    if (!ossl_load_balancer_init(ctx, strategy)) {
+        OSSL_LIB_CTX_free(ctx);
+        return NULL;
+    }
+    ctx->isloadbalancer = 1;
 
     return ctx;
 }
@@ -550,6 +586,8 @@ void *ossl_lib_ctx_get_data(OSSL_LIB_CTX *ctx, int index)
         return ctx->store_loader_store;
     case OSSL_LIB_CTX_SELF_TEST_CB_INDEX:
         return ctx->self_test_cb;
+    case OSSL_LIB_CTX_LB_STRATEGY_INDEX:
+        return ctx->lb_strategy;
 #endif
 #ifndef OPENSSL_NO_THREAD_POOL
     case OSSL_LIB_CTX_THREAD_INDEX:

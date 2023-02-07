@@ -524,12 +524,29 @@ OSSL_LIB_CTX *OSSL_LIB_CTX_new_from_dispatch(const OSSL_CORE_HANDLE *handle,
                                              const OSSL_DISPATCH *in);
 OSSL_LIB_CTX *OSSL_LIB_CTX_new_child(const OSSL_CORE_HANDLE *handle,
                                      const OSSL_DISPATCH *in);
+OSSL_LIB_CTX *OSSL_LIB_CTX_new_load_balancer(const OSSL_CORE_HANDLE *handle,
+                                             const OSSL_DISPATCH *in,
+                                             int strategy);
 int OSSL_LIB_CTX_load_config(OSSL_LIB_CTX *ctx, const char *config_file);
 void OSSL_LIB_CTX_free(OSSL_LIB_CTX *);
 OSSL_LIB_CTX *OSSL_LIB_CTX_get0_global_default(void);
 OSSL_LIB_CTX *OSSL_LIB_CTX_set0_default(OSSL_LIB_CTX *libctx);
 
 void OSSL_sleep(uint64_t millis);
+
+#define LB_STRATEGY_ROUND_ROBIN         1
+#define LB_STRATEGY_PRIORITY            2
+#define LB_STRATEGY_FREE_BANDWIDTH      3
+#define LB_STRATEGY_PACKET_SIZE         4
+#define LB_STRATEGY_MAX                 5
+
+/*
+ * a struct to hold query information about free_bandwidths from providers
+ */
+typedef struct {
+    const char *name;           /* name of a method */
+    int free_bandwidth;         /* to be returned by provider upon this query */
+} FREE_BANDWIDTH_QUERY;
 
 # ifdef  __cplusplus
 }

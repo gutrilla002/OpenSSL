@@ -597,6 +597,7 @@ typedef struct cipher_data_st {
     unsigned char *mac_key;
     size_t mac_key_len;
     const char *xts_standard;
+    int enc_then_mac;
 } CIPHER_DATA;
 
 static int cipher_test_init(EVP_TEST *t, const char *alg)
@@ -692,6 +693,10 @@ static int cipher_test_parse(EVP_TEST *t, const char *keyword,
         cdat->key_bits = (size_t)i;
         return 1;
     }
+    if (strcmp(keyword, "Tag") == 0)
+        return parse_bin(value, &cdat->tag, &cdat->tag_len);
+    if (strcmp(keyword, "MACKey") == 0)
+        return parse_bin(value, &cdat->mac_key, &cdat->mac_key_len);
     if (cdat->aead) {
         int tls_aad = 0;
 
@@ -704,8 +709,6 @@ static int cipher_test_parse(EVP_TEST *t, const char *keyword,
             }
             return -1;
         }
-        if (strcmp(keyword, "Tag") == 0)
-            return parse_bin(value, &cdat->tag, &cdat->tag_len);
         if (strcmp(keyword, "SetTagLate") == 0) {
             if (strcmp(value, "TRUE") == 0)
                 cdat->tag_late = 1;
@@ -715,14 +718,19 @@ static int cipher_test_parse(EVP_TEST *t, const char *keyword,
                 return -1;
             return 1;
         }
-        if (strcmp(keyword, "MACKey") == 0)
-            return parse_bin(value, &cdat->mac_key, &cdat->mac_key_len);
         if (strcmp(keyword, "TLSVersion") == 0) {
             char *endptr;
 
             cdat->tls_version = (int)strtol(value, &endptr, 0);
             return value[0] != '\0' && endptr[0] == '\0';
         }
+    } else {
+        if ((strcmp(keyword, "TLSAAD") == 0) ||
+            (strcmp(keyword, "AAD") == 0) ||
+            (strcmp(keyword, "TLSVersion") == 0)) {
+                t->skip = 1;
+                return 1;
+            }
     }
 
     if (strcmp(keyword, "Operation") == 0) {
@@ -740,6 +748,15 @@ static int cipher_test_parse(EVP_TEST *t, const char *keyword,
     }
     if (strcmp(keyword, "XTSStandard") == 0) {
         cdat->xts_standard = value;
+        return 1;
+    }
+    if (strcmp(keyword, "Direction") == 0) {
+        if (strcmp(value, "enc_then_mac") == 0) {
+            if (cdat->aead) {
+                t->skip = 1;
+            }
+            cdat->enc_then_mac = 1;
+        }
         return 1;
     }
     return 0;
@@ -799,6 +816,19 @@ static int cipher_test_enc(EVP_TEST *t, int enc, size_t out_misalign,
     if (!EVP_CipherInit_ex(ctx_base, expected->cipher, NULL, NULL, NULL, enc)) {
         t->err = "CIPHERINIT_ERROR";
         goto err;
+    }
+    if (expected->enc_then_mac) {
+        OSSL_PARAM params[2];
+        unsigned int enc_then_mac = 1;
+
+        params[0] = OSSL_PARAM_construct_uint(OSSL_CIPHER_PARAM_ENC_THEN_MAC,
+                                              &enc_then_mac);
+        params[1] = OSSL_PARAM_construct_end();
+
+        if (!EVP_CIPHER_CTX_set_params(ctx_base, params)) {
+            t->err = "INVALID_DIRECTION";
+            goto err;
+        }
     }
     if (expected->cts_mode != NULL) {
         OSSL_PARAM params[2];
@@ -1080,6 +1110,44 @@ static int cipher_test_enc(EVP_TEST *t, int enc, size_t out_misalign,
                                 rtag, expected->tag_len))
             goto err;
     }
+    if (enc && expected->enc_then_mac) {
+        if (EVP_CIPHER_is_a(expected->cipher, "AES-128-CBC-HMAC-SHA1")
+            || EVP_CIPHER_is_a(expected->cipher, "AES-128-CBC-HMAC-SHA256")
+            || EVP_CIPHER_is_a(expected->cipher, "AES-256-CBC-HMAC-SHA1")
+            || EVP_CIPHER_is_a(expected->cipher, "AES-256-CBC-HMAC-SHA256")) {
+            unsigned char rtag[32] = {0};
+            unsigned tag_len = 0;
+            OSSL_PARAM params[2];
+
+            if (EVP_CIPHER_is_a(expected->cipher, "AES-128-CBC-HMAC-SHA1")
+                || EVP_CIPHER_is_a(expected->cipher, "AES-256-CBC-HMAC-SHA1")) {
+                tag_len = 20;
+            } else if (EVP_CIPHER_is_a(expected->cipher, "AES-128-CBC-HMAC-SHA256")
+                       || EVP_CIPHER_is_a(expected->cipher, "AES-256-CBC-HMAC-SHA256")) {
+                tag_len = 32;
+            }
+
+            if (!TEST_size_t_le(expected->tag_len, tag_len)) {
+                t->err = "TAG_LENGTH_INTERNAL_ERROR";
+                goto err;
+            }
+
+            params[0] = OSSL_PARAM_construct_octet_string(OSSL_CIPHER_HMAC_PARAM_MAC,
+                                                          &rtag[0],
+                                                          tag_len);
+            params[1] = OSSL_PARAM_construct_end();
+
+            if (!EVP_CIPHER_CTX_get_params(ctx, params)) {
+                t->err = "TAG_RETRIEVE_ERROR";
+                goto err;
+            }
+
+            if (!memory_err_compare(t, "TAG_VALUE_MISMATCH",
+                                    expected->tag, expected->tag_len,
+                                    rtag, expected->tag_len))
+                goto err;
+        }
+    }
     /* Check the updated IV */
     if (expected->next_iv != NULL) {
         /* Some (e.g., GCM) tests use IVs longer than EVP_MAX_IV_LENGTH. */
@@ -1117,7 +1185,8 @@ static int cipher_test_valid_fragmentation(CIPHER_DATA *cdat)
             || EVP_CIPHER_get_mode(cdat->cipher) == EVP_CIPH_SIV_MODE
             || EVP_CIPHER_get_mode(cdat->cipher) == EVP_CIPH_GCM_SIV_MODE
             || EVP_CIPHER_get_mode(cdat->cipher) == EVP_CIPH_XTS_MODE
-            || EVP_CIPHER_get_mode(cdat->cipher) == EVP_CIPH_WRAP_MODE) ? 0 : 1;
+            || EVP_CIPHER_get_mode(cdat->cipher) == EVP_CIPH_WRAP_MODE
+            || EVP_CIPHER_get_mode(cdat->cipher) == EVP_CIPH_CBC_MODE) ? 0 : 1;
 }
 
 static int cipher_test_run(EVP_TEST *t)

@@ -572,7 +572,7 @@ int ssl_cipher_get_evp(SSL_CTX *ctx, const SSL_SESSION *s,
     }
 
     if ((*enc != NULL)
-        && (*md != NULL 
+        && (*md != NULL
             || (EVP_CIPHER_get_flags(*enc) & EVP_CIPH_FLAG_AEAD_CIPHER))
         && (!mac_pkey_type || *mac_pkey_type != NID_undef)) {
         const EVP_CIPHER *evp = NULL;
@@ -608,6 +608,10 @@ int ssl_cipher_get_evp(SSL_CTX *ctx, const SSL_SESSION *s,
                                        ctx->propq);
 
         if (evp != NULL) {
+            if((EVP_CIPHER_get_flags(evp) & EVP_CIPH_FLAG_ENC_THEN_MAC) != 0) {
+                ssl_evp_cipher_free(evp);
+                return 1;
+            }
             ssl_evp_cipher_free(*enc);
             ssl_evp_md_free(*md);
             *enc = evp;

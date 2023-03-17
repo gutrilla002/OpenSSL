@@ -16,7 +16,7 @@
 
 #include "cipher_aes_cbc_hmac_sha.h"
 
-#if !defined(AES_CBC_HMAC_SHA_CAPABLE) || !defined(AESNI_CAPABLE)
+#if !defined(AES_CBC_HMAC_SHA_CAPABLE) || (!defined(AESNI_CAPABLE) && !defined(HWAES_CAPABLE))
 int ossl_cipher_capable_aes_cbc_hmac_sha1(void)
 {
     return 0;
@@ -33,16 +33,39 @@ const PROV_CIPHER_HW_AES_HMAC_SHA *ossl_prov_cipher_hw_aes_cbc_hmac_sha1(void)
 # include "internal/constant_time.h"
 
 void sha1_block_data_order(void *c, const void *p, size_t len);
+
+# if     defined(AES_ASM) &&     ( \
+         defined(__x86_64)       || defined(__x86_64__)  || \
+         defined(_M_AMD64)       || defined(_M_X64)      )
 void aesni_cbc_sha1_enc(const void *inp, void *out, size_t blocks,
                         const AES_KEY *key, unsigned char iv[16],
                         SHA_CTX *ctx, const void *in0);
+#  define HWAES_SET_ENCRYPT_KEY aesni_set_encrypt_key
+#  define HWAES_SET_DECRYPT_KEY aesni_set_decrypt_key
+#  define HWAES_CBC_HMAC_SHA1_CAPABLE AESNI_CBC_HMAC_SHA_CAPABLE
+# elif   defined(__aarch64__)
+int asm_aescbc_sha1_hmac(const uint8_t *csrc, uint8_t *cdst, uint64_t clen,
+                         uint8_t *dsrc, uint8_t *ddst, uint64_t dlen,
+                         CIPH_DIGEST *arg);
+void asm_sha1_hmac_aescbc_dec(const uint8_t *csrc, uint8_t *cdst, uint64_t clen,
+                              uint8_t *dsrc, uint8_t *ddst, size_t dlen,
+                              CIPH_DIGEST *arg);
+#  define HWAES_SET_ENCRYPT_KEY aes_v8_set_encrypt_key
+#  define HWAES_SET_DECRYPT_KEY aes_v8_set_decrypt_key
+#  define HWAES128_ENC_CBC_SHA1_ENC_THEN_MAC asm_aescbc_sha1_hmac
+#  define HWAES128_DEC_CBC_SHA1_ENC_THEN_MAC asm_sha1_hmac_aescbc_dec
+/* multiblock is not implemented on aarch64 */
+#  if !defined(OPENSSL_NO_MULTIBLOCK)
+#   define OPENSSL_NO_MULTIBLOCK
+#  endif
+#endif
 
 int ossl_cipher_capable_aes_cbc_hmac_sha1(void)
 {
-    return AESNI_CBC_HMAC_SHA_CAPABLE;
+    return HWAES_CBC_HMAC_SHA1_CAPABLE;;
 }
 
-static int aesni_cbc_hmac_sha1_init_key(PROV_CIPHER_CTX *vctx,
+static int hwaes_cbc_hmac_sha1_init_key(PROV_CIPHER_CTX *vctx,
                                         const unsigned char *key, size_t keylen)
 {
     int ret;
@@ -50,9 +73,9 @@ static int aesni_cbc_hmac_sha1_init_key(PROV_CIPHER_CTX *vctx,
     PROV_AES_HMAC_SHA1_CTX *sctx = (PROV_AES_HMAC_SHA1_CTX *)vctx;
 
     if (ctx->base.enc)
-        ret = aesni_set_encrypt_key(key, keylen * 8, &ctx->ks);
+        ret = HWAES_SET_ENCRYPT_KEY(key, keylen * 8, &ctx->ks);
     else
-        ret = aesni_set_decrypt_key(key, keylen * 8, &ctx->ks);
+        ret = HWAES_SET_DECRYPT_KEY(key, keylen * 8, &ctx->ks);
 
     SHA1_Init(&sctx->head);      /* handy when benchmarking */
     sctx->tail = sctx->head;
@@ -369,9 +392,39 @@ static size_t tls1_multi_block_encrypt(void *vctx,
 }
 # endif /* OPENSSL_NO_MULTIBLOCK */
 
-static int aesni_cbc_hmac_sha1_cipher(PROV_CIPHER_CTX *vctx,
-                                      unsigned char *out,
-                                      const unsigned char *in, size_t len)
+#if defined(AES_CBC_HMAC_SHA_ENC_THEN_MAC)
+static void ciph_digest_arg_init(CIPH_DIGEST *arg, PROV_CIPHER_CTX *vctx)
+{
+    PROV_AES_HMAC_SHA_CTX *ctx = (PROV_AES_HMAC_SHA_CTX *)vctx;
+    PROV_AES_HMAC_SHA1_CTX *sctx = (PROV_AES_HMAC_SHA1_CTX *)vctx;
+
+    arg->cipher.key = (uint8_t *)&(ctx->ks);
+    arg->cipher.key_rounds = ctx->ks.rounds;
+    arg->cipher.iv = (uint8_t *)&(ctx->base.iv);
+    arg->digest.hmac.i_key_pad = (uint8_t *)&(sctx->head);
+    arg->digest.hmac.o_key_pad = (uint8_t *)&(sctx->tail);
+}
+
+static int hwaes_cbc_hmac_sha1_enc_then_mac_chain(PROV_CIPHER_CTX *vctx,
+                                                  unsigned char *out,
+                                                  const unsigned char *in, size_t len)
+{
+    PROV_AES_HMAC_SHA_CTX *ctx = (PROV_AES_HMAC_SHA_CTX *)vctx;
+    CIPH_DIGEST arg= {0};
+    ciph_digest_arg_init(&arg, vctx);
+    if (len % AES_BLOCK_SIZE)
+        return 0;
+    if (ctx->base.enc) {
+        HWAES128_ENC_CBC_SHA1_ENC_THEN_MAC(in, out, len, out, ctx->tag, len, &arg);
+    } else {
+        HWAES128_DEC_CBC_SHA1_ENC_THEN_MAC(in, out, len, out, ctx->tag, len, &arg);
+    }
+    return 1;
+}
+#else
+static int hwaes_cbc_hmac_sha1_mac_then_enc_chain(PROV_CIPHER_CTX *vctx,
+                                                  unsigned char *out,
+                                                  const unsigned char *in, size_t len)
 {
     PROV_AES_HMAC_SHA_CTX *ctx = (PROV_AES_HMAC_SHA_CTX *)vctx;
     PROV_AES_HMAC_SHA1_CTX *sctx = (PROV_AES_HMAC_SHA1_CTX *)vctx;
@@ -627,9 +680,25 @@ static int aesni_cbc_hmac_sha1_cipher(PROV_CIPHER_CTX *vctx,
 
     return 1;
 }
+#endif
+
+static int hwaes_cbc_hmac_sha1_cipher(PROV_CIPHER_CTX *vctx,
+                                      unsigned char *out,
+                                      const unsigned char *in, size_t len)
+{
+#if defined(AES_CBC_HMAC_SHA_ENC_THEN_MAC)
+    PROV_AES_HMAC_SHA_CTX *ctx = (PROV_AES_HMAC_SHA_CTX *)vctx;
+    if (ctx->enc_then_mac == 1)
+        return hwaes_cbc_hmac_sha1_enc_then_mac_chain(vctx, out, in, len);
+    else
+        return 0;
+#else
+    return hwaes_cbc_hmac_sha1_mac_then_enc_chain(vctx, out, in, len);
+#endif
+}
 
 /* EVP_CTRL_AEAD_SET_MAC_KEY */
-static void aesni_cbc_hmac_sha1_set_mac_key(void *vctx,
+static void hwaes_cbc_hmac_sha1_set_mac_key(void *vctx,
                                             const unsigned char *mac, size_t len)
 {
     PROV_AES_HMAC_SHA1_CTX *ctx = (PROV_AES_HMAC_SHA1_CTX *)vctx;
@@ -660,7 +729,7 @@ static void aesni_cbc_hmac_sha1_set_mac_key(void *vctx,
 }
 
 /* EVP_CTRL_AEAD_TLS1_AAD */
-static int aesni_cbc_hmac_sha1_set_tls1_aad(void *vctx,
+static int hwaes_cbc_hmac_sha1_set_tls1_aad(void *vctx,
                                             unsigned char *aad_rec, int aad_len)
 {
     PROV_AES_HMAC_SHA_CTX *ctx = (PROV_AES_HMAC_SHA_CTX *)vctx;
@@ -775,11 +844,11 @@ static int aesni_cbc_hmac_sha1_tls1_multiblock_encrypt(
 
 static const PROV_CIPHER_HW_AES_HMAC_SHA cipher_hw_aes_hmac_sha1 = {
     {
-      aesni_cbc_hmac_sha1_init_key,
-      aesni_cbc_hmac_sha1_cipher
+      hwaes_cbc_hmac_sha1_init_key,
+      hwaes_cbc_hmac_sha1_cipher
     },
-    aesni_cbc_hmac_sha1_set_mac_key,
-    aesni_cbc_hmac_sha1_set_tls1_aad,
+    hwaes_cbc_hmac_sha1_set_mac_key,
+    hwaes_cbc_hmac_sha1_set_tls1_aad,
 # if !defined(OPENSSL_NO_MULTIBLOCK)
     aesni_cbc_hmac_sha1_tls1_multiblock_max_bufsize,
     aesni_cbc_hmac_sha1_tls1_multiblock_aad,

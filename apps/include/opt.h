@@ -21,7 +21,8 @@
  */
 # define OPT_V_ENUM \
         OPT_V__FIRST=2000, \
-        OPT_V_POLICY, OPT_V_PURPOSE, OPT_V_VERIFY_NAME, OPT_V_VERIFY_DEPTH, \
+        OPT_V_POLICY, OPT_V_EKU, OPT_V_EKU_INCLUDED, OPT_V_PURPOSE, \
+        OPT_V_VERIFY_NAME, OPT_V_VERIFY_DEPTH, \
         OPT_V_ATTIME, OPT_V_VERIFY_HOSTNAME, OPT_V_VERIFY_EMAIL, \
         OPT_V_VERIFY_IP, OPT_V_IGNORE_CRITICAL, OPT_V_ISSUER_CHECKS, \
         OPT_V_CRL_CHECK, OPT_V_CRL_CHECK_ALL, OPT_V_POLICY_CHECK, \
@@ -36,6 +37,10 @@
 # define OPT_V_OPTIONS \
         OPT_SECTION("Validation"), \
         { "policy", OPT_V_POLICY, 's', "adds policy to the acceptable policy set"}, \
+        { "eku", OPT_V_EKU, 's', \
+            "leaf certificate Extended Key Usage (EKU), e.g., serverAuth"}, \
+        { "eku_included", OPT_V_EKU_INCLUDED, '-', \
+            "the required EKU must be included in the EKU cert extension"}, \
         { "purpose", OPT_V_PURPOSE, 's', \
             "certificate chain purpose"}, \
         { "verify_name", OPT_V_VERIFY_NAME, 's', "verification policy name"}, \
@@ -87,6 +92,7 @@
 # define OPT_V_CASES \
         OPT_V__FIRST: case OPT_V__LAST: break; \
         case OPT_V_POLICY: \
+        case OPT_V_EKU: \
         case OPT_V_PURPOSE: \
         case OPT_V_VERIFY_NAME: \
         case OPT_V_VERIFY_DEPTH: \
@@ -115,6 +121,7 @@
         case OPT_V_PARTIAL_CHAIN: \
         case OPT_V_NO_ALT_CHAINS: \
         case OPT_V_NO_CHECK_TIME: \
+        case OPT_V_EKU_INCLUDED: \
         case OPT_V_ALLOW_PROXY_CERTS
 
 /*
@@ -383,6 +390,7 @@ int opt_cipher_silent(const char *name, EVP_CIPHER **cipherp);
 int opt_check_md(const char *name);
 int opt_md(const char *name, EVP_MD **mdp);
 int opt_md_silent(const char *name, EVP_MD **mdp);
+int opt_oid(const char *name, const char *desc);
 
 int opt_int(const char *arg, int *result);
 void opt_set_unknown_name(const char *name);

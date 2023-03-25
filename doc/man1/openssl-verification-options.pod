@@ -24,8 +24,9 @@ The most important of them are detailed in the following sections.
 In a nutshell, a valid chain of certificates needs to be built up and verified
 starting from the I<target certificate> that is to be verified
 and ending in a certificate that due to some policy is trusted.
-Verification is done relative to the given I<purpose>, which is the intended use
-of the target certificate, such as SSL server, or by default for any purpose.
+Certificate validation can be done relatively to a given Extended Key Usage
+(EKU) or I<purpose> specifying the intended use of the target certificate,
+such as SSL server, or (by default) for any EKU and any purpose.
 
 The details of how each OpenSSL command handles errors
 are documented on the specific command page.
@@ -150,11 +151,16 @@ the chain components and their links are checked thoroughly.
 The first step is to check that each certificate is well-formed.
 Part of these checks are enabled only if the B<-x509_strict> option is given.
 
-The second step is to check the extensions of every untrusted certificate
-for consistency with the supplied purpose.
-If the B<-purpose> option is not given then no such checks are done
+The second step is to check the extensions of every certificate
+for consistency with any given Extended Key Usage (EKU) or purpose.
+If an EKU is given it overrides any purpose requirements for the entire chain.
+Then the target or "leaf" certificate (which may be an end-entity
+certificate or CA certificate) must either not have an EKU extension,
+or the EKU extension must include the specified EKU or the 'wildcard' EKU
+B<anyExtendedKeyUsage>, or the specified EKU is B<anyExtendedKeyUsage>.
+If no B<-purpose> or B<-eku> option is given then no such checks are done
 except for SSL/TLS connection setup,
-where by default C<sslserver> or C<sslclient>, are checked.
+where by default the purpose C<sslserver> or C<sslclient> is checked.
 The target or "leaf" certificate, as well as any other untrusted certificates,
 must have extensions compatible with the specified purpose.
 All certificates except the target or "leaf" must also be valid CA certificates.
@@ -430,7 +436,7 @@ This option may be used multiple times.
 =item B<-policy> I<arg>
 
 Enable policy processing and add I<arg> to the user-initial-policy-set (see
-RFC5280). The policy I<arg> can be an object name an OID in numeric form.
+RFC5280). The policy I<arg> can be an object name or an OID in numeric form.
 This argument can appear more than once.
 
 =item B<-explicit_policy>
@@ -453,6 +459,19 @@ Set policy variable inhibit-any-policy (see RFC5280).
 
 Set policy variable inhibit-policy-mapping (see RFC5280).
 
+=item B<-eku> I<arg>
+
+The required Extented Key Usage of the leaf certificate in the chain.
+This overrides the purpose checks for all certificates in the chain.
+The EKU I<arg> can be an object name or an OID in numeric form.
+
+For details see the L</Certification Path Validation> section above.
+
+=item B<-eku_included>
+
+Modify the B<-eku> check such that an EKU cerificate extension must be present
+and must include the specified EKU.
+
 =item B<-purpose> I<purpose>
 
 The intended use for the certificate.
@@ -466,6 +485,8 @@ with TLS server or TLS client use, respectively.
 While IETF RFC 5280 says that B<id-kp-serverAuth> and B<id-kp-clientAuth>
 are only for WWW use, in practice they are used for all kinds of TLS clients
 and servers, and this is what OpenSSL assumes as well.
+
+For details on the checks performed see the L</Certificate Extensions> section.
 
 =item B<-verify_depth> I<num>
 

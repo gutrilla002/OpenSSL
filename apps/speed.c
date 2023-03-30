@@ -77,6 +77,9 @@ VirtualLock(
 #include <openssl/dsa.h>
 #include "./testdsa.h"
 #include <openssl/modes.h>
+#ifndef OPENSSL_NO_SM3
+# include <internal/sm3.h>
+#endif
 
 #ifndef HAVE_FORK
 # if defined(OPENSSL_SYS_VMS) || defined(OPENSSL_SYS_WINDOWS) || defined(OPENSSL_SYS_VXWORKS)
@@ -293,7 +296,7 @@ enum {
     D_CBC_RC2, D_CBC_RC5, D_CBC_BF, D_CBC_CAST,
     D_CBC_128_AES, D_CBC_192_AES, D_CBC_256_AES,
     D_CBC_128_CML, D_CBC_192_CML, D_CBC_256_CML,
-    D_EVP, D_GHASH, D_RAND, D_EVP_CMAC, ALGOR_NUM
+    D_EVP, D_GHASH, D_RAND, D_EVP_CMAC, D_SM3, ALGOR_NUM
 };
 /* name of algorithms to test. MUST BE KEEP IN SYNC with above enum ! */
 static const char *names[ALGOR_NUM] = {
@@ -303,7 +306,7 @@ static const char *names[ALGOR_NUM] = {
     "rc2-cbc", "rc5-cbc", "blowfish", "cast-cbc",
     "aes-128-cbc", "aes-192-cbc", "aes-256-cbc",
     "camellia-128-cbc", "camellia-192-cbc", "camellia-256-cbc",
-    "evp", "ghash", "rand", "cmac"
+    "evp", "ghash", "rand", "cmac", "sm3"
 };
 
 /* list of configured algorithm (remaining), with some few alias */
@@ -344,7 +347,8 @@ static const OPT_PAIR doit_choices[] = {
     {"cast", D_CBC_CAST},
     {"cast5", D_CBC_CAST},
     {"ghash", D_GHASH},
-    {"rand", D_RAND}
+    {"rand", D_RAND},
+    {"sm3", D_SM3}
 };
 
 static double results[ALGOR_NUM][SIZE_NUM];
@@ -660,6 +664,13 @@ static int EVP_Digest_RMD160_loop(void *args)
 {
     return EVP_Digest_loop("ripemd160", D_RMD160, args);
 }
+
+#ifndef OPENSSL_NO_SM3
+static int EVP_Digest_SM3_loop(void *args)
+{
+    return EVP_Digest_loop("sm3", D_SM3, args);
+}
+#endif
 
 static int algindex;
 
@@ -1769,6 +1780,14 @@ int speed_main(int argc, char **argv)
             continue;
         }
 #endif
+
+#ifndef OPENSSL_NO_SM3
+        if (strcmp(algo, "sm3") == 0) {
+            doit[D_SM3] = 1;
+            continue;
+        }
+#endif
+
         BIO_printf(bio_err, "%s: Unknown algorithm %s\n", prog, algo);
         goto end;
     }
@@ -2390,6 +2409,19 @@ skip_hmac:
         EVP_MAC_free(mac);
         mac = NULL;
     }
+
+#ifndef OPENSSL_NO_SM3
+    if (doit[D_SM3]) {
+        for (testnum = 0; testnum < size_num; testnum++) {
+            print_message(names[D_SM3], c[D_SM3][testnum],
+                          lengths[testnum], seconds.sym);
+            Time_F(START);
+            count = run_benchmark(async_jobs, EVP_Digest_SM3_loop, loopargs);
+            d = Time_F(STOP);
+            print_result(D_SM3, testnum, count, d);
+        }
+    }
+#endif
 
     for (i = 0; i < loopargs_len; i++)
         if (RAND_bytes(loopargs[i].buf, 36) <= 0)

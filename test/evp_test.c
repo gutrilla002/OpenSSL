@@ -1113,9 +1113,11 @@ static int cipher_test_enc(EVP_TEST *t, int enc, size_t out_misalign,
     if (enc && expected->enc_then_mac) {
         if (EVP_CIPHER_is_a(expected->cipher, "AES-128-CBC-HMAC-SHA1")
             || EVP_CIPHER_is_a(expected->cipher, "AES-128-CBC-HMAC-SHA256")
+            || EVP_CIPHER_is_a(expected->cipher, "AES-128-CBC-HMAC-SHA512")
             || EVP_CIPHER_is_a(expected->cipher, "AES-256-CBC-HMAC-SHA1")
-            || EVP_CIPHER_is_a(expected->cipher, "AES-256-CBC-HMAC-SHA256")) {
-            unsigned char rtag[32] = {0};
+            || EVP_CIPHER_is_a(expected->cipher, "AES-256-CBC-HMAC-SHA256")
+            || EVP_CIPHER_is_a(expected->cipher, "AES-256-CBC-HMAC-SHA512")) {
+            unsigned char rtag[64] = {0};
             unsigned tag_len = 0;
             OSSL_PARAM params[2];
 
@@ -1125,6 +1127,9 @@ static int cipher_test_enc(EVP_TEST *t, int enc, size_t out_misalign,
             } else if (EVP_CIPHER_is_a(expected->cipher, "AES-128-CBC-HMAC-SHA256")
                        || EVP_CIPHER_is_a(expected->cipher, "AES-256-CBC-HMAC-SHA256")) {
                 tag_len = 32;
+            } else if (EVP_CIPHER_is_a(expected->cipher, "AES-128-CBC-HMAC-SHA512")
+                       || EVP_CIPHER_is_a(expected->cipher, "AES-256-CBC-HMAC-SHA512")) {
+                tag_len = 64;
             }
 
             if (!TEST_size_t_le(expected->tag_len, tag_len)) {

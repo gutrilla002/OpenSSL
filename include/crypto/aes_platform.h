@@ -116,6 +116,8 @@ void gcm_ghash_p8(u64 Xi[2],const u128 Htable[16],const u8 *inp, size_t len);
                                           (OPENSSL_armcap_P & ARMV8_SHA1))
 #     define HWAES_CBC_HMAC_SHA256_CAPABLE (HWAES_CAPABLE && \
                                             (OPENSSL_armcap_P & ARMV8_SHA256))
+#     define HWAES_CBC_HMAC_SHA512_CAPABLE (HWAES_CAPABLE && \
+                                            (OPENSSL_armcap_P & ARMV8_SHA512))
 #    endif
 #    define HWAES_ctr32_encrypt_blocks aes_v8_ctr32_encrypt_blocks
 #    define HWAES_ctr32_encrypt_blocks_unroll12_eor3 aes_v8_ctr32_encrypt_blocks_unroll12_eor3

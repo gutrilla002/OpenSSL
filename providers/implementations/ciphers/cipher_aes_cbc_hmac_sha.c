@@ -422,6 +422,40 @@ static void aes_cbc_hmac_sha256_freectx(void *vctx)
     }
 }
 
+static void *aes_cbc_hmac_sha512_newctx(void *provctx, size_t kbits,
+                                        size_t blkbits, size_t ivbits,
+                                        uint64_t flags)
+{
+    PROV_AES_HMAC_SHA512_CTX *ctx;
+
+    if (!ossl_prov_is_running())
+        return NULL;
+
+    ctx = OPENSSL_zalloc(sizeof(*ctx));
+    if (ctx != NULL)
+        base_init(provctx, &ctx->base_ctx,
+                  ossl_prov_cipher_hw_aes_cbc_hmac_sha512(), kbits, blkbits,
+                  ivbits, flags);
+    return ctx;
+}
+
+static void *aes_cbc_hmac_sha512_dupctx(void *provctx)
+{
+    PROV_AES_HMAC_SHA512_CTX *ctx = provctx;
+
+    return OPENSSL_memdup(ctx, sizeof(*ctx));
+}
+
+static void aes_cbc_hmac_sha512_freectx(void *vctx)
+{
+    PROV_AES_HMAC_SHA512_CTX *ctx = (PROV_AES_HMAC_SHA512_CTX *)vctx;
+
+    if (ctx != NULL) {
+        ossl_cipher_generic_reset_ctx((PROV_CIPHER_CTX *)vctx);
+        OPENSSL_clear_free(ctx, sizeof(*ctx));
+    }
+}
+
 # define IMPLEMENT_CIPHER(nm, sub, kbits, blkbits, ivbits, flags)              \
 static OSSL_FUNC_cipher_newctx_fn nm##_##kbits##_##sub##_newctx;               \
 static void *nm##_##kbits##_##sub##_newctx(void *provctx)                      \
@@ -468,3 +502,7 @@ IMPLEMENT_CIPHER(aes, cbc_hmac_sha1, 256, 128, 128, AES_CBC_HMAC_SHA_FLAGS)
 IMPLEMENT_CIPHER(aes, cbc_hmac_sha256, 128, 128, 128, AES_CBC_HMAC_SHA_FLAGS)
 /* ossl_aes256cbc_hmac_sha256_functions */
 IMPLEMENT_CIPHER(aes, cbc_hmac_sha256, 256, 128, 128, AES_CBC_HMAC_SHA_FLAGS)
+/* ossl_aes128cbc_hmac_sha512_functions */
+IMPLEMENT_CIPHER(aes, cbc_hmac_sha512, 128, 128, 128, AES_CBC_HMAC_SHA_FLAGS)
+/* ossl_aes256cbc_hmac_sha512_functions */
+IMPLEMENT_CIPHER(aes, cbc_hmac_sha512, 256, 128, 128, AES_CBC_HMAC_SHA_FLAGS)

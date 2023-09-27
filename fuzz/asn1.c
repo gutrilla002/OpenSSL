@@ -174,6 +174,7 @@ static ASN1_ITEM_EXP *item_type[] = {
 #endif
     ASN1_ITEM_ref(SXNET),
     ASN1_ITEM_ref(SXNETID),
+    ASN1_ITEM_ref(TARGETING_INFORMATION),
     ASN1_ITEM_ref(USERNOTICE),
     ASN1_ITEM_ref(X509),
     ASN1_ITEM_ref(X509_ALGOR),

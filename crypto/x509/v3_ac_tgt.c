@@ -166,7 +166,6 @@ static int i2r_TARGET_CERT(X509V3_EXT_METHOD *method,
         i2r_ISSUER_SERIAL(method, tc->targetCertificate, out, indent + 2);
     }
     if (tc->targetName != NULL) {
-        // BIO_puts(out, "Target Name: ");
         BIO_printf(out, "%*sTarget Name: ", indent, "");
         GENERAL_NAME_print(out, tc->targetName);
         BIO_puts(out, "\n");

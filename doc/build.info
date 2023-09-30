@@ -1575,6 +1575,10 @@ DEPEND[html/man3/OPENSSL_strcasecmp.html]=man3/OPENSSL_strcasecmp.pod
 GENERATE[html/man3/OPENSSL_strcasecmp.html]=man3/OPENSSL_strcasecmp.pod
 DEPEND[man/man3/OPENSSL_strcasecmp.3]=man3/OPENSSL_strcasecmp.pod
 GENERATE[man/man3/OPENSSL_strcasecmp.3]=man3/OPENSSL_strcasecmp.pod
+DEPEND[html/man3/ossl_print_gens.html]=man3/ossl_print_gens.pod
+GENERATE[html/man3/ossl_print_gens.html]=man3/ossl_print_gens.pod
+DEPEND[man/man3/ossl_print_gens.3]=man3/ossl_print_gens.pod
+GENERATE[man/man3/ossl_print_gens.3]=man3/ossl_print_gens.pod
 DEPEND[html/man3/OSSL_ALGORITHM.html]=man3/OSSL_ALGORITHM.pod
 GENERATE[html/man3/OSSL_ALGORITHM.html]=man3/OSSL_ALGORITHM.pod
 DEPEND[man/man3/OSSL_ALGORITHM.3]=man3/OSSL_ALGORITHM.pod
@@ -3301,6 +3305,7 @@ html/man3/OPENSSL_malloc.html \
 html/man3/OPENSSL_s390xcap.html \
 html/man3/OPENSSL_secure_malloc.html \
 html/man3/OPENSSL_strcasecmp.html \
+html/man3/ossl_print_gens.html \
 html/man3/OSSL_ALGORITHM.html \
 html/man3/OSSL_CALLBACK.html \
 html/man3/OSSL_CMP_CTX_new.html \
@@ -3940,6 +3945,7 @@ man/man3/OPENSSL_malloc.3 \
 man/man3/OPENSSL_s390xcap.3 \
 man/man3/OPENSSL_secure_malloc.3 \
 man/man3/OPENSSL_strcasecmp.3 \
+man/man3/ossl_print_gens.3 \
 man/man3/OSSL_ALGORITHM.3 \
 man/man3/OSSL_CALLBACK.3 \
 man/man3/OSSL_CMP_CTX_new.3 \

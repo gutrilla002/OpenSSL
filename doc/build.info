@@ -1575,10 +1575,6 @@ DEPEND[html/man3/OPENSSL_strcasecmp.html]=man3/OPENSSL_strcasecmp.pod
 GENERATE[html/man3/OPENSSL_strcasecmp.html]=man3/OPENSSL_strcasecmp.pod
 DEPEND[man/man3/OPENSSL_strcasecmp.3]=man3/OPENSSL_strcasecmp.pod
 GENERATE[man/man3/OPENSSL_strcasecmp.3]=man3/OPENSSL_strcasecmp.pod
-DEPEND[html/man3/ossl_print_gens.html]=man3/ossl_print_gens.pod
-GENERATE[html/man3/ossl_print_gens.html]=man3/ossl_print_gens.pod
-DEPEND[man/man3/ossl_print_gens.3]=man3/ossl_print_gens.pod
-GENERATE[man/man3/ossl_print_gens.3]=man3/ossl_print_gens.pod
 DEPEND[html/man3/OSSL_ALGORITHM.html]=man3/OSSL_ALGORITHM.pod
 GENERATE[html/man3/OSSL_ALGORITHM.html]=man3/OSSL_ALGORITHM.pod
 DEPEND[man/man3/OSSL_ALGORITHM.3]=man3/OSSL_ALGORITHM.pod
@@ -3023,6 +3019,10 @@ DEPEND[html/man3/o2i_SCT_LIST.html]=man3/o2i_SCT_LIST.pod
 GENERATE[html/man3/o2i_SCT_LIST.html]=man3/o2i_SCT_LIST.pod
 DEPEND[man/man3/o2i_SCT_LIST.3]=man3/o2i_SCT_LIST.pod
 GENERATE[man/man3/o2i_SCT_LIST.3]=man3/o2i_SCT_LIST.pod
+DEPEND[html/man3/ossl_print_gens.html]=man3/ossl_print_gens.pod
+GENERATE[html/man3/ossl_print_gens.html]=man3/ossl_print_gens.pod
+DEPEND[man/man3/ossl_print_gens.3]=man3/ossl_print_gens.pod
+GENERATE[man/man3/ossl_print_gens.3]=man3/ossl_print_gens.pod
 DEPEND[html/man3/s2i_ASN1_IA5STRING.html]=man3/s2i_ASN1_IA5STRING.pod
 GENERATE[html/man3/s2i_ASN1_IA5STRING.html]=man3/s2i_ASN1_IA5STRING.pod
 DEPEND[man/man3/s2i_ASN1_IA5STRING.3]=man3/s2i_ASN1_IA5STRING.pod
@@ -3305,7 +3305,6 @@ html/man3/OPENSSL_malloc.html \
 html/man3/OPENSSL_s390xcap.html \
 html/man3/OPENSSL_secure_malloc.html \
 html/man3/OPENSSL_strcasecmp.html \
-html/man3/ossl_print_gens.html \
 html/man3/OSSL_ALGORITHM.html \
 html/man3/OSSL_CALLBACK.html \
 html/man3/OSSL_CMP_CTX_new.html \
@@ -3667,6 +3666,7 @@ html/man3/i2d_CMS_bio_stream.html \
 html/man3/i2d_PKCS7_bio_stream.html \
 html/man3/i2d_re_X509_tbs.html \
 html/man3/o2i_SCT_LIST.html \
+html/man3/ossl_print_gens.html \
 html/man3/s2i_ASN1_IA5STRING.html
 MANDOCS[man3]=man/man3/ADMISSIONS.3 \
 man/man3/ASN1_EXTERN_FUNCS.3 \
@@ -3945,7 +3945,6 @@ man/man3/OPENSSL_malloc.3 \
 man/man3/OPENSSL_s390xcap.3 \
 man/man3/OPENSSL_secure_malloc.3 \
 man/man3/OPENSSL_strcasecmp.3 \
-man/man3/ossl_print_gens.3 \
 man/man3/OSSL_ALGORITHM.3 \
 man/man3/OSSL_CALLBACK.3 \
 man/man3/OSSL_CMP_CTX_new.3 \
@@ -4307,6 +4306,7 @@ man/man3/i2d_CMS_bio_stream.3 \
 man/man3/i2d_PKCS7_bio_stream.3 \
 man/man3/i2d_re_X509_tbs.3 \
 man/man3/o2i_SCT_LIST.3 \
+man/man3/ossl_print_gens.3 \
 man/man3/s2i_ASN1_IA5STRING.3
 DEPEND[html/man5/config.html]=man5/config.pod
 GENERATE[html/man5/config.html]=man5/config.pod

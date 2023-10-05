@@ -8,6 +8,7 @@
  */
 
 #include "bn_local.h"
+#include "internal/constant_time.h"
 #include "internal/cryptlib.h"
 
 #define BN_NIST_192_TOP (192+BN_BITS2-1)/BN_BITS2
@@ -281,6 +282,17 @@ static void nist_cp_bn(BN_ULONG *dst, const BN_ULONG *src, int top)
         dst[i] = src[i];
 }
 
+/**
+ * Helper function that calls constant_time_cond_swap_buff() with the correct
+ * types for BNs.
+ */
+static void constant_time_cond_swap_bn(unsigned char mask, BN_ULONG *a,
+                                              BN_ULONG *b, int top) {
+    /* TODO, may be faster to use a function that works on BN_ULONG */
+    constant_time_cond_swap_buff(mask, (unsigned char *) a,
+                                 (unsigned char *) b, top * sizeof(BN_ULONG));
+}
+
 #if BN_BITS2 == 64
 # define bn_cp_64(to, n, from, m)        (to)[n] = (m>=0)?((from)[m]):0;
 # define bn_64_set_0(to, n)              (to)[n] = (BN_ULONG)0;
@@ -326,6 +338,13 @@ static void nist_cp_bn(BN_ULONG *dst, const BN_ULONG *src, int top)
         bn_cp_64(to, 2, from, (a1) - 3) \
         }
 
+/*
+ * `carry` is a signed integer that has the range of [-4, +6].
+ * In order to use carry with the `constant_time_*` functions, we need to
+ * offset `carry` so that it fits inside of an unsigned integer.
+ */
+#define CARRY_TO_UINT_OFFSET 16384 /* 2^14 */
+
 int BN_nist_mod_192(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
                     BN_CTX *ctx)
 {
@@ -337,7 +356,7 @@ int BN_nist_mod_192(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
         unsigned int ui[BN_NIST_192_TOP * sizeof(BN_ULONG) /
                         sizeof(unsigned int)];
     } buf;
-    BN_ULONG c_d[BN_NIST_192_TOP], *res;
+    BN_ULONG c_d[BN_NIST_192_TOP];
     static const BIGNUM ossl_bignum_nist_p_192_sqr = {
         (BN_ULONG *)_nist_p_192_sqr,
         OSSL_NELEM(_nist_p_192_sqr),
@@ -425,12 +444,20 @@ int BN_nist_mod_192(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
             carry += (int)bn_add_words(r_d, r_d, t_d, BN_NIST_192_TOP);
     }
 #endif
-    if (carry > 0)
-        carry =
-            (int)bn_sub_words(r_d, r_d, _nist_p_192[carry - 1],
-                              BN_NIST_192_TOP);
-    else
-        carry = 1;
+    {
+        BN_ULONG table_row[BN_NIST_192_TOP];
+        int sub_carry;
+
+        constant_time_lookup(
+            table_row, _nist_p_192, BN_NIST_192_TOP * sizeof(BN_ULONG),
+            OSSL_NELEM(_nist_p_192), carry - 1
+        );
+        sub_carry = bn_sub_words(c_d, r_d, table_row, BN_NIST_192_TOP);
+        constant_time_cond_swap_bn(constant_time_ge_8(carry, 1),
+                                   c_d, r_d, BN_NIST_192_TOP);
+        carry = constant_time_select_int(constant_time_ge(carry, 1),
+                                         sub_carry, 1); /* if carry > 0 */
+    }
 
     /*
      * we need 'if (carry==0 || result>=modulus) result-=modulus;'
@@ -438,18 +465,19 @@ int BN_nist_mod_192(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
      * 'tmp=result-modulus; if (!carry || !borrow) result=tmp;'
      * this is what happens below, but without explicit if:-) a.
      */
-    res = (bn_sub_words(c_d, r_d, _nist_p_192[0], BN_NIST_192_TOP) && carry)
-        ? r_d
-        : c_d;
-    nist_cp_bn(r_d, res, BN_NIST_192_TOP);
+    {
+        int sub_carry = bn_sub_words(c_d, r_d, _nist_p_192[0], BN_NIST_192_TOP);
+        carry = constant_time_select_int(constant_time_is_zero(sub_carry),
+                                         0, carry);
+    }
+    constant_time_cond_swap_bn(
+        constant_time_is_zero_8(carry),
+        r_d, c_d, BN_NIST_192_TOP);
     r->top = BN_NIST_192_TOP;
     bn_correct_top(r);
 
     return 1;
 }
-
-typedef BN_ULONG (*bn_addsub_f) (BN_ULONG *, const BN_ULONG *,
-                                 const BN_ULONG *, int);
 
 #define nist_set_224(to, from, a1, a2, a3, a4, a5, a6, a7) \
         { \
@@ -473,8 +501,11 @@ int BN_nist_mod_224(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
         unsigned int ui[BN_NIST_224_TOP * sizeof(BN_ULONG) /
                         sizeof(unsigned int)];
     } buf;
-    BN_ULONG c_d[BN_NIST_224_TOP], *res;
-    bn_addsub_f adjust;
+    BN_ULONG c_d[BN_NIST_224_TOP];
+    enum adjust_fn {
+        ADJUST_WITH_SUB = 0,
+        ADJUST_WITH_ADD = 1
+    } adjust;
     static const BIGNUM ossl_bignum_nist_p_224_sqr = {
         (BN_ULONG *)_nist_p_224_sqr,
         OSSL_NELEM(_nist_p_224_sqr),
@@ -588,15 +619,34 @@ int BN_nist_mod_224(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
 # endif
     }
 #endif
-    adjust = bn_sub_words;
-    if (carry > 0) {
-        carry =
-            (int)bn_sub_words(r_d, r_d, _nist_p_224[carry - 1],
-                              BN_NIST_224_TOP);
+    adjust = ADJUST_WITH_SUB;
+    {
+        unsigned int gt0_mask = constant_time_ge(carry + CARRY_TO_UINT_OFFSET,
+                                                 1 + CARRY_TO_UINT_OFFSET);
+        unsigned int lt0_mask = constant_time_lt(carry + CARRY_TO_UINT_OFFSET,
+                                                 CARRY_TO_UINT_OFFSET);
+        BN_ULONG table_row[BN_NIST_224_TOP];
+        int sub_carry, add_carry;
+
+        constant_time_lookup(
+            table_row, _nist_p_224, BN_NIST_224_TOP * sizeof(BN_ULONG),
+            OSSL_NELEM(_nist_p_224),
+            constant_time_select_int(
+                gt0_mask, carry - 1,
+                constant_time_select_int(lt0_mask, -carry - 1, /* unused */ 0)
+            )
+        );
+
+        /* if carry > 0 */
+        sub_carry = bn_sub_words(c_d, r_d, table_row, BN_NIST_224_TOP);
+        constant_time_cond_swap_bn(
+            constant_time_ge_8(carry + CARRY_TO_UINT_OFFSET,
+                               1 + CARRY_TO_UINT_OFFSET),
+            c_d, r_d, BN_NIST_224_TOP);
 #if BN_BITS2==64
-        carry = (int)(~(r_d[BN_NIST_224_TOP - 1] >> 32)) & 1;
+        sub_carry = (int)(~(r_d[BN_NIST_224_TOP - 1] >> 32)) & 1;
 #endif
-    } else if (carry < 0) {
+        /* else if (carry < 0) */
         /*
          * it's a bit more complicated logic in this case. if bn_add_words
          * yields no carry, then result has to be adjusted by unconditionally
@@ -604,18 +654,60 @@ int BN_nist_mod_224(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
          * compared to the modulus and conditionally adjusted by
          * *subtracting* the latter.
          */
-        carry =
-            (int)bn_add_words(r_d, r_d, _nist_p_224[-carry - 1],
-                              BN_NIST_224_TOP);
-        adjust = carry ? bn_sub_words : bn_add_words;
-    } else
-        carry = 1;
+        add_carry = bn_add_words(c_d, r_d, table_row, BN_NIST_224_TOP);
+        constant_time_cond_swap_bn(
+            constant_time_lt_8(carry + CARRY_TO_UINT_OFFSET,
+                               CARRY_TO_UINT_OFFSET),
+                c_d, r_d, BN_NIST_224_TOP);
+        adjust = constant_time_select_int(
+            lt0_mask,
+            constant_time_select_int(
+                constant_time_is_zero(add_carry),
+                ADJUST_WITH_ADD,
+                ADJUST_WITH_SUB
+            ),
+            adjust
+        );
 
+        carry = constant_time_select_int(gt0_mask, sub_carry,
+                                         constant_time_select_int(lt0_mask,
+                                                                  add_carry,
+                                                                  1));
+    }
+
+    /*-
+     * Constant-time equivalent to:
+     *
+     * if (adjust == ADJUST_WITH_ADD)
+     *   carry = bn_add_words(c_d, r_d, _nist_p_224[0], BN_NIST_224_TOP) && carry;
+     * else
+     *   carry = bn_sub_words(c_d, r_d, _nist_p_224[0], BN_NIST_224_TOP) && carry;
+     */
+    {
+        BN_ULONG add_res[BN_NIST_224_TOP];
+        int add_carry, sub_carry, adjust_carry;
+
+        sub_carry = bn_sub_words(c_d, r_d, _nist_p_224[0], BN_NIST_224_TOP);
+        add_carry = bn_add_words(add_res, r_d, _nist_p_224[0], BN_NIST_224_TOP);
+        constant_time_cond_swap_bn(
+            constant_time_eq_int_8(adjust, ADJUST_WITH_ADD),
+            c_d,
+            add_res,
+            BN_NIST_224_TOP
+        );
+
+        adjust_carry = constant_time_select_int(
+            constant_time_eq_int(adjust, ADJUST_WITH_ADD),
+            add_carry, sub_carry
+        );
+        /* carry = adjust_carry && carry */
+        carry = constant_time_select_int(constant_time_is_zero(adjust_carry),
+                                         0, carry);
+    }
     /* otherwise it's effectively same as in BN_nist_mod_192... */
-    res = ((*adjust) (c_d, r_d, _nist_p_224[0], BN_NIST_224_TOP) && carry)
-        ? r_d
-        : c_d;
-    nist_cp_bn(r_d, res, BN_NIST_224_TOP);
+    constant_time_cond_swap_bn(
+        constant_time_is_zero_8(carry),
+        r_d, c_d, BN_NIST_224_TOP);
     r->top = BN_NIST_224_TOP;
     bn_correct_top(r);
 
@@ -645,8 +737,11 @@ int BN_nist_mod_256(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
         unsigned int ui[BN_NIST_256_TOP * sizeof(BN_ULONG) /
                         sizeof(unsigned int)];
     } buf;
-    BN_ULONG c_d[BN_NIST_256_TOP], *res;
-    bn_addsub_f adjust;
+    BN_ULONG c_d[BN_NIST_256_TOP];
+    enum adjust_fn {
+        ADJUST_WITH_SUB = 0,
+        ADJUST_WITH_ADD = 1
+    } adjust;
     static const BIGNUM ossl_bignum_nist_p_256_sqr = {
         (BN_ULONG *)_nist_p_256_sqr,
         OSSL_NELEM(_nist_p_256_sqr),
@@ -832,23 +927,76 @@ int BN_nist_mod_256(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
     }
 #endif
     /* see BN_nist_mod_224 for explanation */
-    adjust = bn_sub_words;
-    if (carry > 0)
-        carry =
-            (int)bn_sub_words(r_d, r_d, _nist_p_256[carry - 1],
-                              BN_NIST_256_TOP);
-    else if (carry < 0) {
-        carry =
-            (int)bn_add_words(r_d, r_d, _nist_p_256[-carry - 1],
-                              BN_NIST_256_TOP);
-        adjust = carry ? bn_sub_words : bn_add_words;
-    } else
-        carry = 1;
+    adjust = ADJUST_WITH_SUB;
+    {
+        unsigned int gt0_mask = constant_time_ge(carry + CARRY_TO_UINT_OFFSET,
+                                                 1 + CARRY_TO_UINT_OFFSET);
+        unsigned int lt0_mask = constant_time_lt(carry + CARRY_TO_UINT_OFFSET,
+                                                 CARRY_TO_UINT_OFFSET);
+        BN_ULONG table_row[BN_NIST_256_TOP];
+        int sub_carry, add_carry;
 
-    res = ((*adjust) (c_d, r_d, _nist_p_256[0], BN_NIST_256_TOP) && carry)
-        ? r_d
-        : c_d;
-    nist_cp_bn(r_d, res, BN_NIST_256_TOP);
+        constant_time_lookup(
+            table_row, _nist_p_256, BN_NIST_256_TOP * sizeof(BN_ULONG),
+            OSSL_NELEM(_nist_p_256),
+            constant_time_select_int(
+                gt0_mask, carry - 1,
+                constant_time_select_int(lt0_mask, -carry - 1, /* unused */ 0)
+            )
+        );
+
+        /* if carry > 0 */
+        sub_carry = bn_sub_words(c_d, r_d, table_row, BN_NIST_256_TOP);
+        constant_time_cond_swap_bn(
+            constant_time_ge_8(carry + CARRY_TO_UINT_OFFSET,
+                               1 + CARRY_TO_UINT_OFFSET),
+            c_d, r_d, BN_NIST_256_TOP);
+
+        /* else if (carry < 0) */
+        add_carry = bn_add_words(c_d, r_d, table_row, BN_NIST_256_TOP);
+        constant_time_cond_swap_bn(
+            constant_time_lt_8(carry + CARRY_TO_UINT_OFFSET,
+                               CARRY_TO_UINT_OFFSET),
+                c_d, r_d, BN_NIST_256_TOP);
+        adjust = constant_time_select_int(
+            lt0_mask,
+            constant_time_select_int(
+                constant_time_is_zero(carry),
+                ADJUST_WITH_ADD,
+                ADJUST_WITH_SUB
+            ),
+            adjust
+        );
+
+        carry = constant_time_select_int(gt0_mask, sub_carry,
+                                         constant_time_select_int(lt0_mask,
+                                                                  add_carry,
+                                                                  1));
+    }
+    {
+        BN_ULONG add_res[BN_NIST_256_TOP];
+        int add_carry, sub_carry, adjust_carry;
+
+        sub_carry = bn_sub_words(c_d, r_d, _nist_p_256[0], BN_NIST_256_TOP);
+        add_carry = bn_add_words(add_res, r_d, _nist_p_256[0], BN_NIST_256_TOP);
+        constant_time_cond_swap_bn(
+            constant_time_eq_int_8(adjust, ADJUST_WITH_ADD),
+            c_d,
+            add_res,
+            BN_NIST_256_TOP
+        );
+
+        adjust_carry = constant_time_select_int(
+            constant_time_eq_int(adjust, ADJUST_WITH_ADD),
+            add_carry, sub_carry
+        );
+        /* carry = adjust_carry && carry */
+        carry = constant_time_select_int(constant_time_is_zero(adjust_carry),
+                                         0, carry);
+    }
+    constant_time_cond_swap_bn(
+        constant_time_is_zero_8(carry),
+        r_d, c_d, BN_NIST_256_TOP);
     r->top = BN_NIST_256_TOP;
     bn_correct_top(r);
 
@@ -882,8 +1030,11 @@ int BN_nist_mod_384(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
         unsigned int ui[BN_NIST_384_TOP * sizeof(BN_ULONG) /
                         sizeof(unsigned int)];
     } buf;
-    BN_ULONG c_d[BN_NIST_384_TOP], *res;
-    bn_addsub_f adjust;
+    BN_ULONG c_d[BN_NIST_384_TOP];
+    enum adjust_fn {
+        ADJUST_WITH_SUB = 0,
+        ADJUST_WITH_ADD = 1
+    } adjust;
     static const BIGNUM ossl_bignum_nist_p_384_sqr = {
         (BN_ULONG *)_nist_p_384_sqr,
         OSSL_NELEM(_nist_p_384_sqr),
@@ -1104,23 +1255,77 @@ int BN_nist_mod_384(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
     }
 #endif
     /* see BN_nist_mod_224 for explanation */
-    adjust = bn_sub_words;
-    if (carry > 0)
-        carry =
-            (int)bn_sub_words(r_d, r_d, _nist_p_384[carry - 1],
-                              BN_NIST_384_TOP);
-    else if (carry < 0) {
-        carry =
-            (int)bn_add_words(r_d, r_d, _nist_p_384[-carry - 1],
-                              BN_NIST_384_TOP);
-        adjust = carry ? bn_sub_words : bn_add_words;
-    } else
-        carry = 1;
+    adjust = ADJUST_WITH_SUB;
+    {
+        unsigned int gt0_mask = constant_time_ge(carry + CARRY_TO_UINT_OFFSET,
+                                                 1 + CARRY_TO_UINT_OFFSET);
+        unsigned int lt0_mask = constant_time_lt(carry + CARRY_TO_UINT_OFFSET,
+                                                 CARRY_TO_UINT_OFFSET);
+        BN_ULONG table_row[BN_NIST_384_TOP];
+        int sub_carry, add_carry;
 
-    res = ((*adjust) (c_d, r_d, _nist_p_384[0], BN_NIST_384_TOP) && carry)
-        ? r_d
-        : c_d;
-    nist_cp_bn(r_d, res, BN_NIST_384_TOP);
+        constant_time_lookup(
+            table_row, _nist_p_384, BN_NIST_384_TOP * sizeof(BN_ULONG),
+            OSSL_NELEM(_nist_p_384),
+            constant_time_select_int(
+                gt0_mask, carry - 1,
+                constant_time_select_int(lt0_mask, -carry - 1, /* unused */ 0)
+            )
+        );
+
+        /* if carry > 0 */
+        sub_carry = bn_sub_words(c_d, r_d, table_row, BN_NIST_384_TOP);
+        constant_time_cond_swap_bn(
+            constant_time_ge_8(carry + CARRY_TO_UINT_OFFSET,
+                               1 + CARRY_TO_UINT_OFFSET),
+            c_d, r_d, BN_NIST_384_TOP);
+
+        /* else if (carry < 0) */
+        add_carry = bn_add_words(c_d, r_d, table_row, BN_NIST_384_TOP);
+        constant_time_cond_swap_bn(
+            constant_time_lt_8(carry + CARRY_TO_UINT_OFFSET,
+                               CARRY_TO_UINT_OFFSET),
+                c_d, r_d, BN_NIST_384_TOP);
+        adjust = constant_time_select_int(
+            lt0_mask,
+            constant_time_select_int(
+                constant_time_is_zero(carry),
+                ADJUST_WITH_ADD,
+                ADJUST_WITH_SUB
+            ),
+            adjust
+        );
+
+        carry = constant_time_select_int(gt0_mask, sub_carry,
+                                         constant_time_select_int(lt0_mask,
+                                                                  add_carry,
+                                                                  1));
+    }
+
+    {
+        BN_ULONG add_res[BN_NIST_384_TOP];
+        int add_carry, sub_carry, adjust_carry;
+
+        sub_carry = bn_sub_words(c_d, r_d, _nist_p_384[0], BN_NIST_384_TOP);
+        add_carry = bn_add_words(add_res, r_d, _nist_p_384[0], BN_NIST_384_TOP);
+        constant_time_cond_swap_bn(
+            constant_time_eq_int_8(adjust, ADJUST_WITH_ADD),
+            c_d,
+            add_res,
+            BN_NIST_384_TOP
+        );
+
+        adjust_carry = constant_time_select_int(
+            constant_time_eq_int(adjust, ADJUST_WITH_ADD),
+            add_carry, sub_carry
+        );
+        /* carry = adjust_carry && carry */
+        carry = constant_time_select_int(constant_time_is_zero(adjust_carry),
+                                         0, carry);
+    }
+    constant_time_cond_swap_bn(
+        constant_time_is_zero_8(carry),
+        r_d, c_d, BN_NIST_384_TOP);
     r->top = BN_NIST_384_TOP;
     bn_correct_top(r);
 
@@ -1135,7 +1340,7 @@ int BN_nist_mod_521(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
                     BN_CTX *ctx)
 {
     int top = a->top, i;
-    BN_ULONG *r_d, *a_d = a->d, t_d[BN_NIST_521_TOP], val, tmp, *res;
+    BN_ULONG *r_d, *a_d = a->d, t_d[BN_NIST_521_TOP], val, tmp;
     static const BIGNUM ossl_bignum_nist_p_521_sqr = {
         (BN_ULONG *)_nist_p_521_sqr,
         OSSL_NELEM(_nist_p_521_sqr),
@@ -1188,11 +1393,10 @@ int BN_nist_mod_521(BIGNUM *r, const BIGNUM *a, const BIGNUM *field,
     r_d[i] &= BN_NIST_521_TOP_MASK;
 
     bn_add_words(r_d, r_d, t_d, BN_NIST_521_TOP);
-    res = bn_sub_words(t_d, r_d, _nist_p_521,
-                       BN_NIST_521_TOP)
-        ? r_d
-        : t_d;
-    nist_cp_bn(r_d, res, BN_NIST_521_TOP);
+    constant_time_cond_swap_bn(
+        constant_time_is_zero_8(
+            bn_sub_words(t_d, r_d, _nist_p_521, BN_NIST_521_TOP)),
+        r_d, t_d, BN_NIST_521_TOP);
     r->top = BN_NIST_521_TOP;
     bn_correct_top(r);
 

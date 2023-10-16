@@ -1017,59 +1017,65 @@ void PROFESSION_INFO_set0_registrationNumber(
 
 int ossl_print_gens(BIO *out, GENERAL_NAMES *gens, int indent);
 
-typedef struct ISSUER_SERIAL_st {
+struct ISSUER_SERIAL_st {
     GENERAL_NAMES *issuer;
     ASN1_INTEGER *serial;
     ASN1_BIT_STRING *issuerUID;
-} ISSUER_SERIAL;
+};
 
-#define ODI_TYPE_PUBLIC_KEY      0
-#define ODI_TYPE_PUBLIC_KEY_CERT 1
-#define ODI_TYPE_OTHER           2
+typedef struct ISSUER_SERIAL_st OSSL_ISSUER_SERIAL;
+ 
+#define OSSL_ODI_TYPE_PUBLIC_KEY      0
+#define OSSL_ODI_TYPE_PUBLIC_KEY_CERT 1
+#define OSSL_ODI_TYPE_OTHER           2
 
-typedef struct OBJECT_DIGEST_INFO_st {
+struct OBJECT_DIGEST_INFO_st {
     ASN1_ENUMERATED *digestedObjectType;
     ASN1_OBJECT *otherObjectTypeID;
     X509_ALGOR *digestAlgorithm;
     ASN1_BIT_STRING *objectDigest;
-} OBJECT_DIGEST_INFO;
+};
 
-typedef struct TARGET_CERT_st {
-    ISSUER_SERIAL *targetCertificate;
+typedef struct OBJECT_DIGEST_INFO_st OSSL_OBJECT_DIGEST_INFO;
+
+struct TARGET_CERT_st {
+    OSSL_ISSUER_SERIAL *targetCertificate;
     GENERAL_NAME *targetName;
-    OBJECT_DIGEST_INFO *certDigestInfo;
-} TARGET_CERT;
+    OSSL_OBJECT_DIGEST_INFO *certDigestInfo;
+};
 
-# define TGT_TARGET_NAME  0
-# define TGT_TARGET_GROUP 1
-# define TGT_TARGET_CERT  2
+typedef struct TARGET_CERT_st OSSL_TARGET_CERT;
+
+# define OSSL_TGT_TARGET_NAME  0
+# define OSSL_TGT_TARGET_GROUP 1
+# define OSSL_TGT_TARGET_CERT  2
 
 typedef struct TARGET_st {
     int type;
     union {
         GENERAL_NAME *targetName;
         GENERAL_NAME *targetGroup;
-        TARGET_CERT *targetCert;
+        OSSL_TARGET_CERT *targetCert;
     } choice;
-} TARGET;
+} OSSL_TARGET;
 
-typedef STACK_OF(TARGET) TARGETS;
-typedef STACK_OF(TARGETS) TARGETING_INFORMATION;
+typedef STACK_OF(OSSL_TARGET) OSSL_TARGETS;
+typedef STACK_OF(OSSL_TARGETS) OSSL_TARGETING_INFORMATION;
 
 {-
-    generate_stack_macros("TARGET");
+    generate_stack_macros("OSSL_TARGET");
 -}
 
 {-
-    generate_stack_macros("TARGETS");
+    generate_stack_macros("OSSL_TARGETS");
 -}
 
-DECLARE_ASN1_FUNCTIONS(ISSUER_SERIAL)
-DECLARE_ASN1_FUNCTIONS(OBJECT_DIGEST_INFO)
-DECLARE_ASN1_FUNCTIONS(TARGET_CERT)
-DECLARE_ASN1_FUNCTIONS(TARGET)
-DECLARE_ASN1_FUNCTIONS(TARGETS)
-DECLARE_ASN1_FUNCTIONS(TARGETING_INFORMATION)
+// DECLARE_ASN1_FUNCTIONS(OSSL_ISSUER_SERIAL)
+// DECLARE_ASN1_FUNCTIONS(OSSL_OBJECT_DIGEST_INFO)
+// DECLARE_ASN1_FUNCTIONS(OSSL_TARGET_CERT)
+DECLARE_ASN1_FUNCTIONS(OSSL_TARGET)
+DECLARE_ASN1_FUNCTIONS(OSSL_TARGETS)
+DECLARE_ASN1_FUNCTIONS(OSSL_TARGETING_INFORMATION)
 
 # ifdef  __cplusplus
 }

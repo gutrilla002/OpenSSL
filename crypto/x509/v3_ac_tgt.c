@@ -18,63 +18,63 @@
 #include "crypto/asn1.h"
 
 static int i2r_ISSUER_SERIAL(X509V3_EXT_METHOD *method,
-                             ISSUER_SERIAL *iss,
+                             OSSL_ISSUER_SERIAL *iss,
                              BIO *out, int indent);
 static int i2r_OBJECT_DIGEST_INFO(X509V3_EXT_METHOD *method,
-                                  OBJECT_DIGEST_INFO *odi,
+                                  OSSL_OBJECT_DIGEST_INFO *odi,
                                   BIO *out, int indent);
 static int i2r_TARGET_CERT(X509V3_EXT_METHOD *method,
-                           TARGET_CERT *tc,
+                           OSSL_TARGET_CERT *tc,
                            BIO *out, int indent);
 static int i2r_TARGET(X509V3_EXT_METHOD *method,
-                      TARGET *target,
+                      OSSL_TARGET *target,
                       BIO *out, int indent);
 static int i2r_TARGETING_INFORMATION(X509V3_EXT_METHOD *method,
-                                     TARGETING_INFORMATION *tinfo,
+                                     OSSL_TARGETING_INFORMATION *tinfo,
                                      BIO *out, int indent);
 
-ASN1_SEQUENCE(ISSUER_SERIAL) = {
-    ASN1_SIMPLE(ISSUER_SERIAL, issuer, GENERAL_NAMES),
-    ASN1_SIMPLE(ISSUER_SERIAL, serial, ASN1_INTEGER),
-    ASN1_OPT(ISSUER_SERIAL, issuerUID, ASN1_BIT_STRING),
-} ASN1_SEQUENCE_END(ISSUER_SERIAL)
+ASN1_SEQUENCE(OSSL_ISSUER_SERIAL) = {
+    ASN1_SIMPLE(OSSL_ISSUER_SERIAL, issuer, GENERAL_NAMES),
+    ASN1_SIMPLE(OSSL_ISSUER_SERIAL, serial, ASN1_INTEGER),
+    ASN1_OPT(OSSL_ISSUER_SERIAL, issuerUID, ASN1_BIT_STRING),
+} static_ASN1_SEQUENCE_END(OSSL_ISSUER_SERIAL)
 
-ASN1_SEQUENCE(OBJECT_DIGEST_INFO) = {
-    ASN1_SIMPLE(OBJECT_DIGEST_INFO, digestedObjectType, ASN1_ENUMERATED),
-    ASN1_OPT(OBJECT_DIGEST_INFO, otherObjectTypeID, ASN1_OBJECT),
-    ASN1_SIMPLE(OBJECT_DIGEST_INFO, digestAlgorithm, X509_ALGOR),
-    ASN1_SIMPLE(OBJECT_DIGEST_INFO, objectDigest, ASN1_BIT_STRING),
-} ASN1_SEQUENCE_END(OBJECT_DIGEST_INFO)
+ASN1_SEQUENCE(OSSL_OBJECT_DIGEST_INFO) = {
+    ASN1_SIMPLE(OSSL_OBJECT_DIGEST_INFO, digestedObjectType, ASN1_ENUMERATED),
+    ASN1_OPT(OSSL_OBJECT_DIGEST_INFO, otherObjectTypeID, ASN1_OBJECT),
+    ASN1_SIMPLE(OSSL_OBJECT_DIGEST_INFO, digestAlgorithm, X509_ALGOR),
+    ASN1_SIMPLE(OSSL_OBJECT_DIGEST_INFO, objectDigest, ASN1_BIT_STRING),
+} static_ASN1_SEQUENCE_END(OSSL_OBJECT_DIGEST_INFO)
 
-ASN1_SEQUENCE(TARGET_CERT) = {
-    ASN1_SIMPLE(TARGET_CERT, targetCertificate, ISSUER_SERIAL),
-    ASN1_OPT(TARGET_CERT, targetName, GENERAL_NAME),
-    ASN1_OPT(TARGET_CERT, certDigestInfo, OBJECT_DIGEST_INFO),
-} ASN1_SEQUENCE_END(TARGET_CERT)
+ASN1_SEQUENCE(OSSL_TARGET_CERT) = {
+    ASN1_SIMPLE(OSSL_TARGET_CERT, targetCertificate, OSSL_ISSUER_SERIAL),
+    ASN1_OPT(OSSL_TARGET_CERT, targetName, GENERAL_NAME),
+    ASN1_OPT(OSSL_TARGET_CERT, certDigestInfo, OSSL_OBJECT_DIGEST_INFO),
+} static_ASN1_SEQUENCE_END(OSSL_TARGET_CERT)
 
-ASN1_CHOICE(TARGET) = {
-    ASN1_EXP(TARGET, choice.targetName, GENERAL_NAME, 0),
-    ASN1_EXP(TARGET, choice.targetGroup, GENERAL_NAME, 1),
-    ASN1_IMP(TARGET, choice.targetCert, TARGET_CERT, 2),
-} ASN1_CHOICE_END(TARGET)
+ASN1_CHOICE(OSSL_TARGET) = {
+    ASN1_EXP(OSSL_TARGET, choice.targetName, GENERAL_NAME, 0),
+    ASN1_EXP(OSSL_TARGET, choice.targetGroup, GENERAL_NAME, 1),
+    ASN1_IMP(OSSL_TARGET, choice.targetCert, OSSL_TARGET_CERT, 2),
+} ASN1_CHOICE_END(OSSL_TARGET)
 
-ASN1_ITEM_TEMPLATE(TARGETS) =
-    ASN1_EX_TEMPLATE_TYPE(ASN1_TFLG_SEQUENCE_OF, 0, Targets, TARGET)
-ASN1_ITEM_TEMPLATE_END(TARGETS)
+ASN1_ITEM_TEMPLATE(OSSL_TARGETS) =
+    ASN1_EX_TEMPLATE_TYPE(ASN1_TFLG_SEQUENCE_OF, 0, Targets, OSSL_TARGET)
+ASN1_ITEM_TEMPLATE_END(OSSL_TARGETS)
 
-ASN1_ITEM_TEMPLATE(TARGETING_INFORMATION) =
-    ASN1_EX_TEMPLATE_TYPE(ASN1_TFLG_SEQUENCE_OF, 0, TargetingInformation, TARGETS)
-ASN1_ITEM_TEMPLATE_END(TARGETING_INFORMATION)
+ASN1_ITEM_TEMPLATE(OSSL_TARGETING_INFORMATION) =
+    ASN1_EX_TEMPLATE_TYPE(ASN1_TFLG_SEQUENCE_OF, 0, TargetingInformation, OSSL_TARGETS)
+ASN1_ITEM_TEMPLATE_END(OSSL_TARGETING_INFORMATION)
 
-IMPLEMENT_ASN1_FUNCTIONS(ISSUER_SERIAL)
-IMPLEMENT_ASN1_FUNCTIONS(OBJECT_DIGEST_INFO)
-IMPLEMENT_ASN1_FUNCTIONS(TARGET_CERT)
-IMPLEMENT_ASN1_FUNCTIONS(TARGET)
-IMPLEMENT_ASN1_FUNCTIONS(TARGETS)
-IMPLEMENT_ASN1_FUNCTIONS(TARGETING_INFORMATION)
+IMPLEMENT_ASN1_FUNCTIONS(OSSL_ISSUER_SERIAL)
+IMPLEMENT_ASN1_FUNCTIONS(OSSL_OBJECT_DIGEST_INFO)
+IMPLEMENT_ASN1_FUNCTIONS(OSSL_TARGET_CERT)
+IMPLEMENT_ASN1_FUNCTIONS(OSSL_TARGET)
+IMPLEMENT_ASN1_FUNCTIONS(OSSL_TARGETS)
+IMPLEMENT_ASN1_FUNCTIONS(OSSL_TARGETING_INFORMATION)
 
 static int i2r_ISSUER_SERIAL(X509V3_EXT_METHOD *method,
-                             ISSUER_SERIAL *iss,
+                             OSSL_ISSUER_SERIAL *iss,
                              BIO *out, int indent)
 {
     if (iss->issuer != NULL) {
@@ -98,7 +98,7 @@ static int i2r_ISSUER_SERIAL(X509V3_EXT_METHOD *method,
 }
 
 static int i2r_OBJECT_DIGEST_INFO(X509V3_EXT_METHOD *method,
-                           OBJECT_DIGEST_INFO *odi,
+                           OSSL_OBJECT_DIGEST_INFO *odi,
                            BIO *out, int indent)
 {
     int64_t dot = 0;
@@ -116,13 +116,13 @@ static int i2r_OBJECT_DIGEST_INFO(X509V3_EXT_METHOD *method,
         return 0;
     }
     switch (dot) {
-    case (ODI_TYPE_PUBLIC_KEY):
+    case (OSSL_ODI_TYPE_PUBLIC_KEY):
         BIO_printf(out, "%*sDigest Type: Public Key\n", indent, "");
         break;
-    case (ODI_TYPE_PUBLIC_KEY_CERT):
+    case (OSSL_ODI_TYPE_PUBLIC_KEY_CERT):
         BIO_printf(out, "%*sDigest Type: Public Key Certificate\n", indent, "");
         break;
-    case (ODI_TYPE_OTHER): {
+    case (OSSL_ODI_TYPE_OTHER): {
         BIO_printf(out, "%*sDigest Type: Other\n", indent, "");
         break;
     }
@@ -157,7 +157,7 @@ static int i2r_OBJECT_DIGEST_INFO(X509V3_EXT_METHOD *method,
 }
 
 static int i2r_TARGET_CERT(X509V3_EXT_METHOD *method,
-                           TARGET_CERT *tc,
+                           OSSL_TARGET_CERT *tc,
                            BIO *out, int indent)
 {
     BIO_printf(out, "%*s", indent, "");
@@ -179,21 +179,21 @@ static int i2r_TARGET_CERT(X509V3_EXT_METHOD *method,
 }
 
 static int i2r_TARGET(X509V3_EXT_METHOD *method,
-                      TARGET *target,
+                      OSSL_TARGET *target,
                       BIO *out, int indent)
 {
     switch (target->type) {
-    case (TGT_TARGET_NAME):
+    case (OSSL_TGT_TARGET_NAME):
         BIO_printf(out, "%*sTarget Name: ", indent, "");
         GENERAL_NAME_print(out, target->choice.targetName);
         BIO_puts(out, "\n");
         break;
-    case (TGT_TARGET_GROUP):
+    case (OSSL_TGT_TARGET_GROUP):
         BIO_printf(out, "%*sTarget Group: ", indent, "");
         GENERAL_NAME_print(out, target->choice.targetGroup);
         BIO_puts(out, "\n");
         break;
-    case (TGT_TARGET_CERT):
+    case (OSSL_TGT_TARGET_CERT):
         BIO_printf(out, "%*sTarget Cert:\n", indent, "");
         i2r_TARGET_CERT(method, target->choice.targetCert, out, indent + 2);
         break;
@@ -202,35 +202,35 @@ static int i2r_TARGET(X509V3_EXT_METHOD *method,
 }
 
 static int i2r_TARGETS(X509V3_EXT_METHOD *method,
-                      TARGETS *targets,
+                      OSSL_TARGETS *targets,
                       BIO *out, int indent)
 {
     int i;
-    TARGET *target;
-    for (i = 0; i < sk_TARGET_num(targets); i++) {
+    OSSL_TARGET *target;
+    for (i = 0; i < sk_OSSL_TARGET_num(targets); i++) {
         BIO_printf(out, "%*sTarget:\n", indent, "");
-        target = sk_TARGET_value(targets, i);
+        target = sk_OSSL_TARGET_value(targets, i);
         i2r_TARGET(method, target, out, indent + 2);
     }
     return 1;
 }
 
 static int i2r_TARGETING_INFORMATION(X509V3_EXT_METHOD *method,
-                                     TARGETING_INFORMATION *tinfo,
+                                     OSSL_TARGETING_INFORMATION *tinfo,
                                      BIO *out, int indent)
 {
     int i;
-    TARGETS *targets;
-    for (i = 0; i < sk_TARGETS_num(tinfo); i++) {
+    OSSL_TARGETS *targets;
+    for (i = 0; i < sk_OSSL_TARGETS_num(tinfo); i++) {
         BIO_printf(out, "%*sTargets:\n", indent, "");
-        targets = sk_TARGETS_value(tinfo, i);
+        targets = sk_OSSL_TARGETS_value(tinfo, i);
         i2r_TARGETS(method, targets, out, indent + 2);
     }
     return 1;
 }
 
 const X509V3_EXT_METHOD ossl_v3_targeting_information = {
-    NID_target_information, 0, ASN1_ITEM_ref(TARGETING_INFORMATION),
+    NID_target_information, 0, ASN1_ITEM_ref(OSSL_TARGETING_INFORMATION),
     0, 0, 0, 0,
     0,
     0,

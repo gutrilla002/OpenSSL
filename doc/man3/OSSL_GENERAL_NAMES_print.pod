@@ -2,22 +2,23 @@
 
 =head1 NAME
 
-ossl_print_gens - print GeneralNames in a human-friendly, multi-line string
+OSSL_GENERAL_NAMES_print - print GeneralNames in a human-friendly, multi-line
+string
 
 =head1 SYNOPSIS
 
  #include <openssl/x509v3.h>
 
- int ossl_print_gens(BIO *out, GENERAL_NAMES *gens, int indent);
+ int OSSL_GENERAL_NAMES_print(BIO *out, GENERAL_NAMES *gens, int indent);
 
 =head1 DESCRIPTION
 
-ossl_print_gens() prints a human readable version of the GeneralNames I<gens> to
-BIO I<out>. Each line is indented by I<indent> spaces.
+OSSL_GENERAL_NAMES_print() prints a human readable version of the GeneralNames
+I<gens> to BIO I<out>. Each line is indented by I<indent> spaces.
 
 =head1 RETURN VALUES
 
-ossl_print_gens() always returns 1.
+OSSL_GENERAL_NAMES_print() always returns 1.
 
 =head1 COPYRIGHT
 

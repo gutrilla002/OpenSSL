@@ -1015,7 +1015,7 @@ const ASN1_PRINTABLESTRING *PROFESSION_INFO_get0_registrationNumber(
 void PROFESSION_INFO_set0_registrationNumber(
     PROFESSION_INFO *pi, ASN1_PRINTABLESTRING *rn);
 
-int ossl_print_gens(BIO *out, GENERAL_NAMES *gens, int indent);
+int OSSL_GENERAL_NAMES_print(BIO *out, GENERAL_NAMES *gens, int indent);
 
 struct ISSUER_SERIAL_st {
     GENERAL_NAMES *issuer;

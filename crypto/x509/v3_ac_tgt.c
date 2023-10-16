@@ -79,7 +79,7 @@ static int i2r_ISSUER_SERIAL(X509V3_EXT_METHOD *method,
 {
     if (iss->issuer != NULL) {
         BIO_printf(out, "%*sIssuer Names:\n", indent, "");
-        ossl_print_gens(out, iss->issuer, indent);
+        OSSL_GENERAL_NAMES_print(out, iss->issuer, indent);
         BIO_puts(out, "\n");
     }
     if (iss->serial != NULL) {

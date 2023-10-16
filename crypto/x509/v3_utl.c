@@ -1357,7 +1357,7 @@ int X509V3_NAME_from_section(X509_NAME *nm, STACK_OF(CONF_VALUE) *dn_sk,
     return 1;
 }
 
-int ossl_print_gens(BIO *out, GENERAL_NAMES *gens, int indent)
+int OSSL_GENERAL_NAMES_print(BIO *out, GENERAL_NAMES *gens, int indent)
 {
     int i;
 

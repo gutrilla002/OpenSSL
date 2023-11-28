@@ -22,6 +22,7 @@ jobs:
           no-ct,
           no-dso,
           no-dynamic-engine,
+          no-ec2m,
           no-engine no-shared,
           no-err,
           no-filenames,
@@ -46,5 +47,9 @@ jobs:
       run: ./configdata.pm --dump
     - name: make
       run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        if [ -x apps/openssl ] ; then ./util/opensslwrap.sh version -c ; fi
     - name: make test
       run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}

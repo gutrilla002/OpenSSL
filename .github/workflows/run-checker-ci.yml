@@ -23,12 +23,12 @@ jobs:
           no-dh,
           no-dtls,
           no-ec,
-          no-ec2m,
           no-ecx,
           no-http,
           no-legacy,
           no-sock,
           enable-ssl-trace,
+          no-stdio,
           no-threads,
           no-thread-pool,
           no-default-thread-pool,
@@ -50,5 +50,11 @@ jobs:
       run: ./configdata.pm --dump
     - name: make
       run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        if [ -x apps/openssl ] ; then ./util/opensslwrap.sh version -c ; fi
+    - name: Check platform symbol usage
+      run: ./util/checkplatformsyms.pl ./util/platform_symbols/unix-symbols.txt ./libcrypto.so ./libssl.so
     - name: make test
       run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}

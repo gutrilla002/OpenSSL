@@ -25,9 +25,10 @@
  * TODO(QUIC SERVER): Implement retry logic
  */
 
-#define INIT_DCID_LEN           8
-#define INIT_CRYPTO_BUF_LEN     8192
-#define INIT_APP_BUF_LEN        8192
+#define INIT_DCID_LEN                   8
+#define INIT_CRYPTO_RECV_BUF_LEN    16384
+#define INIT_CRYPTO_SEND_BUF_LEN    16384
+#define INIT_APP_BUF_LEN             8192
 
 /*
  * Interval before we force a PING to ensure NATs don't timeout. This is based
@@ -46,10 +47,11 @@
 
 static void ch_save_err_state(QUIC_CHANNEL *ch);
 static void ch_rx_pre(QUIC_CHANNEL *ch);
-static int ch_rx(QUIC_CHANNEL *ch);
+static int ch_rx(QUIC_CHANNEL *ch, int channel_only);
 static int ch_tx(QUIC_CHANNEL *ch);
 static void ch_tick(QUIC_TICK_RESULT *res, void *arg, uint32_t flags);
-static void ch_rx_handle_packet(QUIC_CHANNEL *ch);
+static int ch_tick_tls(QUIC_CHANNEL *ch, int channel_only);
+static void ch_rx_handle_packet(QUIC_CHANNEL *ch, int channel_only);
 static OSSL_TIME ch_determine_next_tick_deadline(QUIC_CHANNEL *ch);
 static int ch_retry(QUIC_CHANNEL *ch,
                     const unsigned char *retry_token,
@@ -322,7 +324,7 @@ static int ch_init(QUIC_CHANNEL *ch)
 
     for (pn_space = QUIC_PN_SPACE_INITIAL; pn_space < QUIC_PN_SPACE_NUM; ++pn_space)
         if (!ossl_quic_rxfc_init_standalone(&ch->crypto_rxfc[pn_space],
-                                            INIT_CRYPTO_BUF_LEN,
+                                            INIT_CRYPTO_RECV_BUF_LEN,
                                             get_time, ch))
             goto err;
 
@@ -374,7 +376,7 @@ static int ch_init(QUIC_CHANNEL *ch)
     txp_args.now_arg                = ch;
 
     for (pn_space = QUIC_PN_SPACE_INITIAL; pn_space < QUIC_PN_SPACE_NUM; ++pn_space) {
-        ch->crypto_send[pn_space] = ossl_quic_sstream_new(INIT_CRYPTO_BUF_LEN);
+        ch->crypto_send[pn_space] = ossl_quic_sstream_new(INIT_CRYPTO_SEND_BUF_LEN);
         if (ch->crypto_send[pn_space] == NULL)
             goto err;
 
@@ -635,7 +637,7 @@ int ossl_quic_channel_is_active(const QUIC_CHANNEL *ch)
     return ch != NULL && ch->state == QUIC_CHANNEL_STATE_ACTIVE;
 }
 
-static int ossl_quic_channel_is_closing(const QUIC_CHANNEL *ch)
+int ossl_quic_channel_is_closing(const QUIC_CHANNEL *ch)
 {
     return ch->state == QUIC_CHANNEL_STATE_TERMINATING_CLOSING;
 }
@@ -1281,8 +1283,10 @@ static int ch_on_transport_params(const unsigned char *params,
     QUIC_CONN_ID cid;
     const char *reason = "bad transport parameter";
 
-    if (ch->got_remote_transport_params)
+    if (ch->got_remote_transport_params) {
+        reason = "multiple transport parameter extensions";
         goto malformed;
+    }
 
     if (!PACKET_buf_init(&pkt, params, params_len)) {
         ossl_quic_channel_raise_protocol_error(ch, QUIC_ERR_INTERNAL_ERROR, 0,
@@ -1311,11 +1315,13 @@ static int ch_on_transport_params(const unsigned char *params,
                 goto malformed;
             }
 
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
             /* Must match our initial DCID. */
             if (!ossl_quic_conn_id_eq(&ch->init_dcid, &cid)) {
                 reason = TP_REASON_EXPECTED_VALUE("ORIG_DCID");
                 goto malformed;
             }
+#endif
 
             got_orig_dcid = 1;
             break;
@@ -1848,9 +1854,6 @@ static void ch_tick(QUIC_TICK_RESULT *res, void *arg, uint32_t flags)
     OSSL_TIME now, deadline;
     QUIC_CHANNEL *ch = arg;
     int channel_only = (flags & QUIC_REACTOR_TICK_FLAG_CHANNEL_ONLY) != 0;
-    uint64_t error_code;
-    const char *error_msg;
-    ERR_STATE *error_state = NULL;
 
     /*
      * When we tick the QUIC connection, we do everything we need to do
@@ -1896,21 +1899,16 @@ static void ch_tick(QUIC_TICK_RESULT *res, void *arg, uint32_t flags)
 
         do {
             /* Process queued incoming packets. */
-            ch_rx(ch);
+            ch->did_tls_tick        = 0;
+            ch->have_new_rx_secret  = 0;
+            ch_rx(ch, channel_only);
 
             /*
              * Allow the handshake layer to check for any new incoming data and
              * generate new outgoing data.
              */
-            ch->have_new_rx_secret = 0;
-            if (!channel_only) {
-                ossl_quic_tls_tick(ch->qtls);
-
-                if (ossl_quic_tls_get_error(ch->qtls, &error_code, &error_msg,
-                                            &error_state))
-                    ossl_quic_channel_raise_protocol_error_state(ch, error_code, 0,
-                                                                 error_msg, error_state);
-            }
+            if (!ch->did_tls_tick)
+                ch_tick_tls(ch, channel_only);
 
             /*
              * If the handshake layer gave us a new secret, we need to do RX
@@ -1955,6 +1953,15 @@ static void ch_tick(QUIC_TICK_RESULT *res, void *arg, uint32_t flags)
             int pn_space = ossl_quic_enc_level_to_pn_space(ch->tx_enc_level);
 
             ossl_quic_tx_packetiser_schedule_ack_eliciting(ch->txp, pn_space);
+
+            /*
+             * If we have no CC budget at this time we cannot process the above
+             * PING request immediately. In any case we have scheduled the
+             * request so bump the ping deadline. If we don't do this we will
+             * busy-loop endlessly as the above deadline comparison condition
+             * will still be met.
+             */
+            ch_update_ping_deadline(ch);
         }
 
         /* Write any data to the network due to be sent. */
@@ -1979,6 +1986,28 @@ static void ch_tick(QUIC_TICK_RESULT *res, void *arg, uint32_t flags)
     res->net_write_desired
         = (!ossl_quic_channel_is_terminated(ch)
            && ossl_qtx_get_queue_len_datagrams(ch->qtx) > 0);
+}
+
+static int ch_tick_tls(QUIC_CHANNEL *ch, int channel_only)
+{
+    uint64_t error_code;
+    const char *error_msg;
+    ERR_STATE *error_state = NULL;
+
+    if (channel_only)
+        return 1;
+
+    ch->did_tls_tick = 1;
+    ossl_quic_tls_tick(ch->qtls);
+
+    if (ossl_quic_tls_get_error(ch->qtls, &error_code, &error_msg,
+                                &error_state)) {
+        ossl_quic_channel_raise_protocol_error_state(ch, error_code, 0,
+                                                     error_msg, error_state);
+        return 0;
+    }
+
+    return 1;
 }
 
 /* Process incoming datagrams, if any. */
@@ -2040,7 +2069,7 @@ static void ch_rx_check_forged_pkt_limit(QUIC_CHANNEL *ch)
 }
 
 /* Process queued incoming packets and handle frames, if any. */
-static int ch_rx(QUIC_CHANNEL *ch)
+static int ch_rx(QUIC_CHANNEL *ch, int channel_only)
 {
     int handled_any = 0;
     const int closing = ossl_quic_channel_is_closing(ch);
@@ -2068,7 +2097,7 @@ static int ch_rx(QUIC_CHANNEL *ch)
             ch_update_ping_deadline(ch);
         }
 
-        ch_rx_handle_packet(ch); /* best effort */
+        ch_rx_handle_packet(ch, channel_only); /* best effort */
 
         /*
          * Regardless of the outcome of frame handling, unref the packet.
@@ -2120,7 +2149,7 @@ static int bio_addr_eq(const BIO_ADDR *a, const BIO_ADDR *b)
 }
 
 /* Handles the packet currently in ch->qrx_pkt->hdr. */
-static void ch_rx_handle_packet(QUIC_CHANNEL *ch)
+static void ch_rx_handle_packet(QUIC_CHANNEL *ch, int channel_only)
 {
     uint32_t enc_level;
     int old_have_processed_any_pkt = ch->have_processed_any_pkt;
@@ -2220,6 +2249,14 @@ static void ch_rx_handle_packet(QUIC_CHANNEL *ch)
              */
             return;
 
+        /*
+         * RFC 9000 s 17.2.5.2: After the client has received and processed an
+         * Initial or Retry packet from the server, it MUST discard any
+         * subsequent Retry packets that it receives.
+         */
+        if (ch->have_received_enc_pkt)
+            return;
+
         if (ch->qrx_pkt->hdr->len <= QUIC_RETRY_INTEGRITY_TAG_LEN)
             /* Packets with zero-length Retry Tokens are invalid. */
             return;
@@ -2294,7 +2331,7 @@ static void ch_rx_handle_packet(QUIC_CHANNEL *ch)
              * non-zero Token Length field MUST either discard the packet or
              * generate a connection error of type PROTOCOL_VIOLATION.
              *
-             * TODO(QUIC): consider the implications of RFC 9000 s. 10.2.3
+             * TODO(QUIC FUTURE): consider the implications of RFC 9000 s. 10.2.3
              * Immediate Close during the Handshake:
              *      However, at the cost of reducing feedback about
              *      errors for legitimate peers, some forms of denial of
@@ -2313,6 +2350,10 @@ static void ch_rx_handle_packet(QUIC_CHANNEL *ch)
 
         /* This packet contains frames, pass to the RXDP. */
         ossl_quic_handle_frames(ch, ch->qrx_pkt); /* best effort */
+
+        if (ch->did_crypto_frame)
+            ch_tick_tls(ch, channel_only);
+
         break;
 
     case QUIC_PKT_TYPE_VERSION_NEG:
@@ -2579,18 +2620,23 @@ static OSSL_TIME ch_determine_next_tick_deadline(QUIC_CHANNEL *ch)
         deadline = ossl_time_infinite();
 
     /*
-     * If the CC will let us send acks, check the ack deadline for all
-     * enc_levels that are actually provisioned
+     * Check the ack deadline for all enc_levels that are actually provisioned.
+     * ACKs aren't restricted by CC.
      */
-    if (ch->cc_method->get_tx_allowance(ch->cc_data) > 0) {
-        for (i = 0; i < QUIC_ENC_LEVEL_NUM; i++) {
-            if (ossl_qtx_is_enc_level_provisioned(ch->qtx, i)) {
-                deadline = ossl_time_min(deadline,
-                                         ossl_ackm_get_ack_deadline(ch->ackm,
-                                                                    ossl_quic_enc_level_to_pn_space(i)));
-            }
+    for (i = 0; i < QUIC_ENC_LEVEL_NUM; i++) {
+        if (ossl_qtx_is_enc_level_provisioned(ch->qtx, i)) {
+            deadline = ossl_time_min(deadline,
+                                     ossl_ackm_get_ack_deadline(ch->ackm,
+                                                                ossl_quic_enc_level_to_pn_space(i)));
         }
     }
+
+    /*
+     * When do we need to send an ACK-eliciting packet to reset the idle
+     * deadline timer for the peer?
+     */
+    if (!ossl_time_is_infinite(ch->ping_deadline))
+        deadline = ossl_time_min(deadline, ch->ping_deadline);
 
     /* Apply TXP wakeup deadline. */
     deadline = ossl_time_min(deadline,
@@ -2603,14 +2649,6 @@ static OSSL_TIME ch_determine_next_tick_deadline(QUIC_CHANNEL *ch)
     else if (!ossl_time_is_infinite(ch->idle_deadline))
         deadline = ossl_time_min(deadline,
                                  ch->idle_deadline);
-
-    /*
-     * When do we need to send an ACK-eliciting packet to reset the idle
-     * deadline timer for the peer?
-     */
-    if (!ossl_time_is_infinite(ch->ping_deadline))
-        deadline = ossl_time_min(deadline,
-                                 ch->ping_deadline);
 
     /* When does the RXKU process complete? */
     if (ch->rxku_in_progress)
@@ -2717,10 +2755,6 @@ int ossl_quic_channel_set_net_wbio(QUIC_CHANNEL *ch, BIO *net_wbio)
  */
 int ossl_quic_channel_start(QUIC_CHANNEL *ch)
 {
-    uint64_t error_code;
-    const char *error_msg;
-    ERR_STATE *error_state = NULL;
-
     if (ch->is_server)
         /*
          * This is not used by the server. The server moves to active
@@ -2749,14 +2783,8 @@ int ossl_quic_channel_start(QUIC_CHANNEL *ch)
     ch->doing_proactive_ver_neg = 0; /* not currently supported */
 
     /* Handshake layer: start (e.g. send CH). */
-    ossl_quic_tls_tick(ch->qtls);
-
-    if (ossl_quic_tls_get_error(ch->qtls, &error_code, &error_msg,
-                                &error_state)) {
-        ossl_quic_channel_raise_protocol_error_state(ch, error_code, 0,
-                                                     error_msg, error_state);
+    if (!ch_tick_tls(ch, /*channel_only=*/0))
         return 0;
-    }
 
     ossl_quic_reactor_tick(&ch->rtor, 0); /* best effort */
     return 1;
@@ -2809,8 +2837,18 @@ static int ch_retry(QUIC_CHANNEL *ch,
     if ((buf = OPENSSL_memdup(retry_token, retry_token_len)) == NULL)
         return 0;
 
-    ossl_quic_tx_packetiser_set_initial_token(ch->txp, buf, retry_token_len,
-                                              free_token, NULL);
+    if (!ossl_quic_tx_packetiser_set_initial_token(ch->txp, buf,
+                                                   retry_token_len,
+                                                   free_token, NULL)) {
+        /*
+         * This may fail if the token we receive is too big for us to ever be
+         * able to transmit in an outgoing Initial packet.
+         */
+        ossl_quic_channel_raise_protocol_error(ch, QUIC_ERR_INVALID_TOKEN, 0,
+                                               "received oversize token");
+        OPENSSL_free(buf);
+        return 0;
+    }
 
     ch->retry_scid  = *retry_scid;
     ch->doing_retry = 1;
@@ -3374,27 +3412,38 @@ static void ch_on_terminating_timeout(QUIC_CHANNEL *ch)
 }
 
 /*
+ * Determines the effective idle timeout duration. This is based on the idle
+ * timeout values that we and our peer signalled in transport parameters
+ * but have some limits applied.
+ */
+static OSSL_TIME ch_get_effective_idle_timeout_duration(QUIC_CHANNEL *ch)
+{
+    OSSL_TIME pto;
+
+    if (ch->max_idle_timeout == 0)
+        return ossl_time_infinite();
+
+    /*
+     * RFC 9000 s. 10.1: Idle Timeout
+     *  To avoid excessively small idle timeout periods, endpoints
+     *  MUST increase the idle timeout period to be at least three
+     *  times the current Probe Timeout (PTO). This allows for
+     *  multiple PTOs to expire, and therefore multiple probes to
+     *  be sent and lost, prior to idle timeout.
+     */
+    pto = ossl_ackm_get_pto_duration(ch->ackm);
+    return ossl_time_max(ossl_ms2time(ch->max_idle_timeout),
+                                      ossl_time_multiply(pto, 3));
+}
+
+/*
  * Updates our idle deadline. Called when an event happens which should bump the
  * idle timeout.
  */
 static void ch_update_idle(QUIC_CHANNEL *ch)
 {
-    if (ch->max_idle_timeout == 0)
-        ch->idle_deadline = ossl_time_infinite();
-    else {
-        /* RFC 9000 s. 10.1: Idle Timeout
-         *  To avoid excessively small idle timeout periods, endpoints
-         *  MUST increase the idle timeout period to be at least three
-         *  times the current Probe Timeout (PTO). This allows for
-         *  multiple PTOs to expire, and therefore multiple probes to
-         *  be sent and lost, prior to idle timeout.
-         */
-        OSSL_TIME pto = ossl_ackm_get_pto_duration(ch->ackm);
-        OSSL_TIME timeout = ossl_time_max(ossl_ms2time(ch->max_idle_timeout),
-                                          ossl_time_multiply(pto, 3));
-
-        ch->idle_deadline = ossl_time_add(get_time(ch), timeout);
-    }
+    ch->idle_deadline = ossl_time_add(get_time(ch),
+                                      ch_get_effective_idle_timeout_duration(ch));
 }
 
 /*
@@ -3403,22 +3452,23 @@ static void ch_update_idle(QUIC_CHANNEL *ch)
  */
 static void ch_update_ping_deadline(QUIC_CHANNEL *ch)
 {
-    if (ch->max_idle_timeout > 0) {
-        /*
-         * Maximum amount of time without traffic before we send a PING to keep
-         * the connection open. Usually we use max_idle_timeout/2, but ensure
-         * the period never exceeds the assumed NAT interval to ensure NAT
-         * devices don't have their state time out (RFC 9000 s. 10.1.2).
-         */
-        OSSL_TIME max_span
-            = ossl_time_divide(ossl_ms2time(ch->max_idle_timeout), 2);
+    OSSL_TIME max_span, idle_duration;
 
-        max_span = ossl_time_min(max_span, MAX_NAT_INTERVAL);
-
-        ch->ping_deadline = ossl_time_add(get_time(ch), max_span);
-    } else {
+    idle_duration = ch_get_effective_idle_timeout_duration(ch);
+    if (ossl_time_is_infinite(idle_duration)) {
         ch->ping_deadline = ossl_time_infinite();
+        return;
     }
+
+    /*
+     * Maximum amount of time without traffic before we send a PING to keep
+     * the connection open. Usually we use max_idle_timeout/2, but ensure
+     * the period never exceeds the assumed NAT interval to ensure NAT
+     * devices don't have their state time out (RFC 9000 s. 10.1.2).
+     */
+    max_span = ossl_time_divide(idle_duration, 2);
+    max_span = ossl_time_min(max_span, MAX_NAT_INTERVAL);
+    ch->ping_deadline = ossl_time_add(get_time(ch), max_span);
 }
 
 /* Called when the idle timeout expires. */

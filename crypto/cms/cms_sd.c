@@ -386,11 +386,15 @@ CMS_SignerInfo *CMS_add1_signer(CMS_ContentInfo *cms,
     if (md == NULL) {
         int def_nid;
 
-        if (EVP_PKEY_get_default_digest_nid(pk, &def_nid) <= 0)
+        if (EVP_PKEY_get_default_digest_nid(pk, &def_nid) <= 0) {
+            ERR_raise_data(ERR_LIB_CMS, CMS_R_NO_DEFAULT_DIGEST,
+                           "pkey nid=%d", EVP_PKEY_get_id(pk));
             goto err;
+        }
         md = EVP_get_digestbynid(def_nid);
         if (md == NULL) {
-            ERR_raise(ERR_LIB_CMS, CMS_R_NO_DEFAULT_DIGEST);
+            ERR_raise_data(ERR_LIB_CMS, CMS_R_NO_DEFAULT_DIGEST,
+                           "default md nid=%d", def_nid);
             goto err;
         }
     }
@@ -422,8 +426,11 @@ CMS_SignerInfo *CMS_add1_signer(CMS_ContentInfo *cms,
         }
     }
 
-    if (!(flags & CMS_KEY_PARAM) && !cms_sd_asn1_ctrl(si, 0))
+    if (!(flags & CMS_KEY_PARAM) && !cms_sd_asn1_ctrl(si, 0)) {
+        ERR_raise_data(ERR_LIB_CMS, CMS_R_UNSUPPORTED_SIGNATURE_ALGORITHM,
+                       "pkey nid=%d", EVP_PKEY_get_id(pk));
         goto err;
+    }
     if (!(flags & CMS_NOATTR)) {
         /*
          * Initialize signed attributes structure so other attributes
@@ -757,8 +764,7 @@ static int cms_SignerInfo_content_sign(CMS_ContentInfo *cms,
             md = computed_md;
         }
         siglen = EVP_PKEY_get_size(si->pkey);
-        sig = OPENSSL_malloc(siglen);
-        if (sig == NULL)
+        if (siglen == 0 || (sig = OPENSSL_malloc(siglen)) == NULL)
             goto err;
         if (EVP_PKEY_sign(pctx, sig, &siglen, md, mdlen) <= 0) {
             OPENSSL_free(sig);
@@ -773,8 +779,8 @@ static int cms_SignerInfo_content_sign(CMS_ContentInfo *cms,
             ERR_raise(ERR_LIB_CMS, CMS_R_OPERATION_UNSUPPORTED);
             goto err;
         }
-        sig = OPENSSL_malloc(EVP_PKEY_get_size(si->pkey));
-        if (sig == NULL)
+        siglen = EVP_PKEY_get_size(si->pkey);
+        if (siglen == 0 || (sig = OPENSSL_malloc(siglen)) == NULL)
             goto err;
         if (!EVP_SignFinal_ex(mctx, sig, &siglen, si->pkey,
                               ossl_cms_ctx_get0_libctx(ctx),

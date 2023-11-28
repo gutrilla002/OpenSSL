@@ -422,7 +422,7 @@ int ossl_qtx_calculate_plaintext_payload_len(OSSL_QTX *qtx, uint32_t enc_level,
 
     tag_len = ossl_qrl_get_suite_cipher_tag_len(el->suite_id);
 
-    if (ciphertext_len < tag_len) {
+    if (ciphertext_len <= tag_len) {
         *plaintext_len = 0;
         return 0;
     }
@@ -542,6 +542,11 @@ static int qtx_encrypt_into_txe(OSSL_QTX *qtx, struct iovec_cur *cur, TXE *txe,
             ERR_raise(ERR_LIB_SSL, ERR_R_EVP_LIB);
             return 0;
         }
+
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+        /* Ignore what we just encrypted and overwrite it with the plaintext */
+        memcpy(txe_data(txe) + txe->data_len, src, l);
+#endif
 
         assert(l > 0 && src_len == (size_t)l);
         txe->data_len += src_len;

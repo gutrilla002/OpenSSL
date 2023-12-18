@@ -963,6 +963,64 @@ const EVP_CIPHER *EVP_aes_256_cbc_hmac_sha1(void)
     return (OPENSSL_ia32cap_P[1] & AESNI_CAPABLE ?
             &aesni_256_cbc_hmac_sha1_cipher : NULL);
 }
+#elif        defined(__aarch64__)
+extern unsigned int OPENSSL_armcap_P;
+# define AES_CAPABLE    (1<<(2))
+# define SHA1_CAPABLE    (1<<(3))
+
+static EVP_CIPHER hwaes_128_cbc_hmac_sha1_cipher = {
+# ifdef NID_aes_128_cbc_hmac_sha1
+    NID_aes_128_cbc_hmac_sha1,
+# else
+    NID_undef,
+# endif
+    AES_BLOCK_SIZE, 16, AES_BLOCK_SIZE,
+    EVP_CIPH_CBC_MODE | EVP_CIPH_FLAG_DEFAULT_ASN1 |
+        EVP_CIPH_FLAG_ENC_THEN_MAC,
+    EVP_ORIG_GLOBAL,
+    NULL,
+    NULL,
+    NULL,
+    sizeof(EVP_AES_HMAC_SHA1),
+    NULL,
+    NULL,
+    NULL,
+    NULL
+};
+
+static EVP_CIPHER hwaes_256_cbc_hmac_sha1_cipher = {
+# ifdef NID_aes_256_cbc_hmac_sha1
+    NID_aes_256_cbc_hmac_sha1,
+# else
+    NID_undef,
+# endif
+    AES_BLOCK_SIZE, 32, AES_BLOCK_SIZE,
+    EVP_CIPH_CBC_MODE | EVP_CIPH_FLAG_DEFAULT_ASN1 |
+        EVP_CIPH_FLAG_ENC_THEN_MAC,
+    EVP_ORIG_GLOBAL,
+    NULL,
+    NULL,
+    NULL,
+    sizeof(EVP_AES_HMAC_SHA1),
+    NULL,
+    NULL,
+    NULL,
+    NULL
+};
+
+const EVP_CIPHER *EVP_aes_128_cbc_hmac_sha1(void)
+{
+    return ((OPENSSL_armcap_P & AES_CAPABLE) &&
+                (OPENSSL_armcap_P & SHA1_CAPABLE) ?
+            &hwaes_128_cbc_hmac_sha1_cipher : NULL);
+}
+
+const EVP_CIPHER *EVP_aes_256_cbc_hmac_sha1(void)
+{
+    return ((OPENSSL_armcap_P & AES_CAPABLE) &&
+                (OPENSSL_armcap_P & SHA1_CAPABLE) ?
+            &hwaes_256_cbc_hmac_sha1_cipher : NULL);
+}
 #else
 const EVP_CIPHER *EVP_aes_128_cbc_hmac_sha1(void)
 {

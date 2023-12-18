@@ -193,6 +193,8 @@ void openssl_add_all_ciphers_int(void)
     EVP_add_cipher(EVP_aes_256_cbc_hmac_sha1());
     EVP_add_cipher(EVP_aes_128_cbc_hmac_sha256());
     EVP_add_cipher(EVP_aes_256_cbc_hmac_sha256());
+    EVP_add_cipher(EVP_aes_128_cbc_hmac_sha512());
+    EVP_add_cipher(EVP_aes_256_cbc_hmac_sha512());
 #ifndef OPENSSL_NO_ARIA
     EVP_add_cipher(EVP_aria_128_ecb());
     EVP_add_cipher(EVP_aria_128_cbc());

@@ -1683,6 +1683,9 @@ sm-scheme 104 10        : SM4-XTS             : sm4-xts
 			: AES-128-CBC-HMAC-SHA256	: aes-128-cbc-hmac-sha256
 			: AES-192-CBC-HMAC-SHA256	: aes-192-cbc-hmac-sha256
 			: AES-256-CBC-HMAC-SHA256	: aes-256-cbc-hmac-sha256
+			: AES-128-CBC-HMAC-SHA512	: aes-128-cbc-hmac-sha512
+			: AES-192-CBC-HMAC-SHA512	: aes-192-cbc-hmac-sha512
+			: AES-256-CBC-HMAC-SHA512	: aes-256-cbc-hmac-sha512
 			: ChaCha20-Poly1305		: chacha20-poly1305
 			: ChaCha20			: chacha20
 

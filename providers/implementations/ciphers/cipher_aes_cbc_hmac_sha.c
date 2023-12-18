@@ -30,8 +30,13 @@ const OSSL_DISPATCH ossl_##nm##kbits##sub##_functions[] = {                    \
 };
 #else
 
+# if     defined(__x86_64)       || defined(__x86_64__)  || \
+         defined(_M_AMD64)       || defined(_M_X64)
 # define AES_CBC_HMAC_SHA_FLAGS (PROV_CIPHER_FLAG_AEAD                         \
                                  | PROV_CIPHER_FLAG_TLS1_MULTIBLOCK)
+# elif   defined(__aarch64__)
+# define AES_CBC_HMAC_SHA_FLAGS EVP_CIPH_FLAG_ENC_THEN_MAC
+#endif
 
 static OSSL_FUNC_cipher_encrypt_init_fn aes_einit;
 static OSSL_FUNC_cipher_decrypt_init_fn aes_dinit;
@@ -45,6 +50,8 @@ static OSSL_FUNC_cipher_settable_ctx_params_fn aes_settable_ctx_params;
 # define aes_update ossl_cipher_generic_stream_update
 # define aes_final ossl_cipher_generic_stream_final
 # define aes_cipher ossl_cipher_generic_cipher
+
+# define UNINITIALISED_SIZET ((size_t)-1)
 
 static int aes_einit(void *ctx, const unsigned char *key, size_t keylen,
                           const unsigned char *iv, size_t ivlen,
@@ -214,6 +221,14 @@ static int aes_set_ctx_params(void *vctx, const OSSL_PARAM params[])
             ctx->base.removetlsfixed -= AES_BLOCK_SIZE;
         }
     }
+
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_ENC_THEN_MAC);
+    if (p != NULL) {
+       if (!OSSL_PARAM_get_uint(p, &ctx->enc_then_mac)) {
+           ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+           return 0;
+       }
+    }
     return ret;
 }
 
@@ -221,6 +236,7 @@ static int aes_get_ctx_params(void *vctx, OSSL_PARAM params[])
 {
     PROV_AES_HMAC_SHA_CTX *ctx = (PROV_AES_HMAC_SHA_CTX *)vctx;
     OSSL_PARAM *p;
+    size_t sz;
 
 # if !defined(OPENSSL_NO_MULTIBLOCK)
     p = OSSL_PARAM_locate(params, OSSL_CIPHER_PARAM_TLS1_MULTIBLOCK_MAX_BUFSIZE);
@@ -283,6 +299,21 @@ static int aes_get_ctx_params(void *vctx, OSSL_PARAM params[])
         ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_SET_PARAMETER);
         return 0;
     }
+    p = OSSL_PARAM_locate(params, OSSL_CIPHER_HMAC_PARAM_MAC);
+    if (p != NULL) {
+        sz = p->data_size;
+        if (sz == 0
+            || sz > AES_CBC_MAX_HMAC_SIZE
+            || !ctx->base.enc
+            || ctx->taglen == UNINITIALISED_SIZET) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_TAG);
+            return 0;
+        }
+        if (!OSSL_PARAM_set_octet_string(p, ctx->tag, sz)) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_SET_PARAMETER);
+            return 0;
+        }
+    }
     return 1;
 }
 
@@ -315,6 +346,9 @@ static void base_init(void *provctx, PROV_AES_HMAC_SHA_CTX *ctx,
                                 EVP_CIPH_CBC_MODE, flags,
                                 &meths->base, provctx);
     ctx->hw = (PROV_CIPHER_HW_AES_HMAC_SHA *)ctx->base.hw;
+    if (flags & EVP_CIPH_FLAG_ENC_THEN_MAC) {
+        ctx->enc_then_mac = 1;
+    }
 }
 
 static void *aes_cbc_hmac_sha1_newctx(void *provctx, size_t kbits,
@@ -388,6 +422,40 @@ static void aes_cbc_hmac_sha256_freectx(void *vctx)
     }
 }
 
+static void *aes_cbc_hmac_sha512_newctx(void *provctx, size_t kbits,
+                                        size_t blkbits, size_t ivbits,
+                                        uint64_t flags)
+{
+    PROV_AES_HMAC_SHA512_CTX *ctx;
+
+    if (!ossl_prov_is_running())
+        return NULL;
+
+    ctx = OPENSSL_zalloc(sizeof(*ctx));
+    if (ctx != NULL)
+        base_init(provctx, &ctx->base_ctx,
+                  ossl_prov_cipher_hw_aes_cbc_hmac_sha512(), kbits, blkbits,
+                  ivbits, flags);
+    return ctx;
+}
+
+static void *aes_cbc_hmac_sha512_dupctx(void *provctx)
+{
+    PROV_AES_HMAC_SHA512_CTX *ctx = provctx;
+
+    return OPENSSL_memdup(ctx, sizeof(*ctx));
+}
+
+static void aes_cbc_hmac_sha512_freectx(void *vctx)
+{
+    PROV_AES_HMAC_SHA512_CTX *ctx = (PROV_AES_HMAC_SHA512_CTX *)vctx;
+
+    if (ctx != NULL) {
+        ossl_cipher_generic_reset_ctx((PROV_CIPHER_CTX *)vctx);
+        OPENSSL_clear_free(ctx, sizeof(*ctx));
+    }
+}
+
 # define IMPLEMENT_CIPHER(nm, sub, kbits, blkbits, ivbits, flags)              \
 static OSSL_FUNC_cipher_newctx_fn nm##_##kbits##_##sub##_newctx;               \
 static void *nm##_##kbits##_##sub##_newctx(void *provctx)                      \
@@ -434,3 +502,7 @@ IMPLEMENT_CIPHER(aes, cbc_hmac_sha1, 256, 128, 128, AES_CBC_HMAC_SHA_FLAGS)
 IMPLEMENT_CIPHER(aes, cbc_hmac_sha256, 128, 128, 128, AES_CBC_HMAC_SHA_FLAGS)
 /* ossl_aes256cbc_hmac_sha256_functions */
 IMPLEMENT_CIPHER(aes, cbc_hmac_sha256, 256, 128, 128, AES_CBC_HMAC_SHA_FLAGS)
+/* ossl_aes128cbc_hmac_sha512_functions */
+IMPLEMENT_CIPHER(aes, cbc_hmac_sha512, 128, 128, 128, AES_CBC_HMAC_SHA_FLAGS)
+/* ossl_aes256cbc_hmac_sha512_functions */
+IMPLEMENT_CIPHER(aes, cbc_hmac_sha512, 256, 128, 128, AES_CBC_HMAC_SHA_FLAGS)

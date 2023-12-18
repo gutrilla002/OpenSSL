@@ -98,6 +98,8 @@ extern const OSSL_DISPATCH ossl_aes256cbc_hmac_sha1_functions[];
 extern const OSSL_DISPATCH ossl_aes128cbc_hmac_sha1_functions[];
 extern const OSSL_DISPATCH ossl_aes256cbc_hmac_sha256_functions[];
 extern const OSSL_DISPATCH ossl_aes128cbc_hmac_sha256_functions[];
+extern const OSSL_DISPATCH ossl_aes256cbc_hmac_sha512_functions[];
+extern const OSSL_DISPATCH ossl_aes128cbc_hmac_sha512_functions[];
 
 #ifndef OPENSSL_NO_ARIA
 extern const OSSL_DISPATCH ossl_aria256gcm_functions[];

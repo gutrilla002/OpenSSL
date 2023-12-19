@@ -1015,6 +1015,65 @@ const ASN1_PRINTABLESTRING *PROFESSION_INFO_get0_registrationNumber(
 void PROFESSION_INFO_set0_registrationNumber(
     PROFESSION_INFO *pi, ASN1_PRINTABLESTRING *rn);
 
+int OSSL_GENERAL_NAMES_print(BIO *out, GENERAL_NAMES *gens, int indent);
+
+struct ISSUER_SERIAL_st {
+    GENERAL_NAMES *issuer;
+    ASN1_INTEGER *serial;
+    ASN1_BIT_STRING *issuerUID;
+};
+
+typedef struct ISSUER_SERIAL_st OSSL_ISSUER_SERIAL;
+ 
+#define OSSL_ODI_TYPE_PUBLIC_KEY      0
+#define OSSL_ODI_TYPE_PUBLIC_KEY_CERT 1
+#define OSSL_ODI_TYPE_OTHER           2
+
+struct OBJECT_DIGEST_INFO_st {
+    ASN1_ENUMERATED *digestedObjectType;
+    ASN1_OBJECT *otherObjectTypeID;
+    X509_ALGOR *digestAlgorithm;
+    ASN1_BIT_STRING *objectDigest;
+};
+
+typedef struct OBJECT_DIGEST_INFO_st OSSL_OBJECT_DIGEST_INFO;
+
+struct TARGET_CERT_st {
+    OSSL_ISSUER_SERIAL *targetCertificate;
+    GENERAL_NAME *targetName;
+    OSSL_OBJECT_DIGEST_INFO *certDigestInfo;
+};
+
+typedef struct TARGET_CERT_st OSSL_TARGET_CERT;
+
+# define OSSL_TGT_TARGET_NAME  0
+# define OSSL_TGT_TARGET_GROUP 1
+# define OSSL_TGT_TARGET_CERT  2
+
+typedef struct TARGET_st {
+    int type;
+    union {
+        GENERAL_NAME *targetName;
+        GENERAL_NAME *targetGroup;
+        OSSL_TARGET_CERT *targetCert;
+    } choice;
+} OSSL_TARGET;
+
+typedef STACK_OF(OSSL_TARGET) OSSL_TARGETS;
+typedef STACK_OF(OSSL_TARGETS) OSSL_TARGETING_INFORMATION;
+
+{-
+    generate_stack_macros("OSSL_TARGET");
+-}
+
+{-
+    generate_stack_macros("OSSL_TARGETS");
+-}
+
+DECLARE_ASN1_FUNCTIONS(OSSL_TARGET)
+DECLARE_ASN1_FUNCTIONS(OSSL_TARGETS)
+DECLARE_ASN1_FUNCTIONS(OSSL_TARGETING_INFORMATION)
+
 # ifdef  __cplusplus
 }
 # endif

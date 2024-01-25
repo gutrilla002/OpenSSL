@@ -675,8 +675,17 @@ int tls13_change_cipher_state(SSL_CONNECTION *s, int which)
                ? OSSL_RECORD_PROTECTION_LEVEL_HANDSHAKE
                : OSSL_RECORD_PROTECTION_LEVEL_APPLICATION);
 
-    if (SSL_CONNECTION_IS_DTLS(s))
+    if (SSL_CONNECTION_IS_DTLS(s)) {
         dtls1_increment_epoch(s, which);
+        if (level == OSSL_RECORD_PROTECTION_LEVEL_HANDSHAKE
+                && dtls1_get_epoch(s, which) == 1) {
+            /*
+             * We must manually increment epoch because
+             * client early traffic was not sent/recv
+             */
+            dtls1_increment_epoch(s, which);
+        }
+    }
 
     if (!ssl_set_new_record_layer(s, s->version,
                                   direction,

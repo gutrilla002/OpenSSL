@@ -1846,6 +1846,9 @@ EVP_PKEY *EVP_PKEY_CTX_get0_peerkey(EVP_PKEY_CTX *ctx);
 void EVP_PKEY_CTX_set_app_data(EVP_PKEY_CTX *ctx, void *data);
 void *EVP_PKEY_CTX_get_app_data(EVP_PKEY_CTX *ctx);
 
+int EVP_PKEY_CTX_set_signature(EVP_PKEY_CTX *pctx,
+                               const unsigned char *sig, size_t siglen);
+
 void EVP_SIGNATURE_free(EVP_SIGNATURE *signature);
 int EVP_SIGNATURE_up_ref(EVP_SIGNATURE *signature);
 OSSL_PROVIDER *EVP_SIGNATURE_get0_provider(const EVP_SIGNATURE *signature);
@@ -1899,17 +1902,33 @@ const OSSL_PARAM *EVP_KEM_settable_ctx_params(const EVP_KEM *kem);
 
 int EVP_PKEY_sign_init(EVP_PKEY_CTX *ctx);
 int EVP_PKEY_sign_init_ex(EVP_PKEY_CTX *ctx, const OSSL_PARAM params[]);
+int EVP_PKEY_sign_init_ex2(EVP_PKEY_CTX *ctx, EVP_SIGNATURE *algo,
+                           const OSSL_PARAM params[]);
+int EVP_PKEY_sign_update(EVP_PKEY_CTX *ctx,
+                         const unsigned char *in, size_t inlen);
+int EVP_PKEY_sign_final(EVP_PKEY_CTX *ctx, unsigned char *sig, size_t *siglen);
 int EVP_PKEY_sign(EVP_PKEY_CTX *ctx,
                   unsigned char *sig, size_t *siglen,
                   const unsigned char *tbs, size_t tbslen);
 int EVP_PKEY_verify_init(EVP_PKEY_CTX *ctx);
 int EVP_PKEY_verify_init_ex(EVP_PKEY_CTX *ctx, const OSSL_PARAM params[]);
+int EVP_PKEY_verify_init_ex2(EVP_PKEY_CTX *ctx, EVP_SIGNATURE *algo,
+                             const OSSL_PARAM params[]);
+int EVP_PKEY_verify_update(EVP_PKEY_CTX *ctx,
+                           const unsigned char *in, size_t inlen);
+int EVP_PKEY_verify_final(EVP_PKEY_CTX *ctx);
 int EVP_PKEY_verify(EVP_PKEY_CTX *ctx,
                     const unsigned char *sig, size_t siglen,
                     const unsigned char *tbs, size_t tbslen);
 int EVP_PKEY_verify_recover_init(EVP_PKEY_CTX *ctx);
 int EVP_PKEY_verify_recover_init_ex(EVP_PKEY_CTX *ctx,
                                     const OSSL_PARAM params[]);
+int EVP_PKEY_verify_recover_init_ex2(EVP_PKEY_CTX *ctx, EVP_SIGNATURE *algo,
+                                     const OSSL_PARAM params[]);
+int EVP_PKEY_verify_recover_update(EVP_PKEY_CTX *ctx,
+                                   const unsigned char *in, size_t inlen);
+int EVP_PKEY_verify_recover_final(EVP_PKEY_CTX *ctx,
+                                  unsigned char *rout, size_t *routlen);
 int EVP_PKEY_verify_recover(EVP_PKEY_CTX *ctx,
                             unsigned char *rout, size_t *routlen,
                             const unsigned char *sig, size_t siglen);

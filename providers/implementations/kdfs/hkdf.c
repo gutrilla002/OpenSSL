@@ -331,30 +331,48 @@ static const OSSL_PARAM *kdf_hkdf_settable_ctx_params(ossl_unused void *ctx,
 
 static int kdf_hkdf_get_ctx_params(void *vctx, OSSL_PARAM params[])
 {
+    int ret = -2;
     KDF_HKDF *ctx = (KDF_HKDF *)vctx;
     OSSL_PARAM *p;
 
     if ((p = OSSL_PARAM_locate(params, OSSL_KDF_PARAM_SIZE)) != NULL) {
         size_t sz = kdf_hkdf_size(ctx);
 
+        ret = 1;
+
         if (sz == 0)
             return 0;
-        return OSSL_PARAM_set_size_t(p, sz);
+        if (!OSSL_PARAM_set_size_t(p, sz))
+            return 0;
     }
     if ((p = OSSL_PARAM_locate(params, OSSL_KDF_PARAM_INFO)) != NULL) {
-        if (ctx->info == NULL || ctx->info_len == 0) {
+        ret = 1;
+
+        if (ctx->info == NULL || ctx->info_len == 0)
             p->return_size = 0;
-            return 1;
-        }
-        return OSSL_PARAM_set_octet_string(p, ctx->info, ctx->info_len);
+        else if (!OSSL_PARAM_set_octet_string(p, ctx->info, ctx->info_len))
+            return 0;
     }
-    return -2;
+
+#ifdef FIPS_MODULE
+    if ((p = OSSL_PARAM_locate(params, OSSL_KDF_PARAM_PEDANTIC)) != NULL) {
+        ret = 1;
+
+        if (!OSSL_PARAM_set_int(p, ctx->pedantic))
+            return 0;
+    }
+#endif
+
+    return ret;
 }
 
 static const OSSL_PARAM *kdf_hkdf_gettable_ctx_params(ossl_unused void *ctx,
                                                       ossl_unused void *provctx)
 {
     static const OSSL_PARAM known_gettable_ctx_params[] = {
+#ifdef FIPS_MODULE
+        OSSL_PARAM_int(OSSL_KDF_PARAM_PEDANTIC, NULL),
+#endif
         OSSL_PARAM_size_t(OSSL_KDF_PARAM_SIZE, NULL),
         OSSL_PARAM_octet_string(OSSL_KDF_PARAM_INFO, NULL, 0),
         OSSL_PARAM_END

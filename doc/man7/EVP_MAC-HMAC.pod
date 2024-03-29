@@ -79,6 +79,17 @@ The following parameter can be retrieved with EVP_MAC_CTX_get_params():
 
 =over 4
 
+=item "pedantic" (B<OSSL_MAC_PARAM_PEDANTIC>) <integer>
+
+Get the status for strict compliance. If the value is 0, the operation is not
+approved unless related standard defines it can be used for legacy use.
+
+Currently, only FIPS provider supports this parameter.
+
+=back
+
+=over 4
+
 =item "size" (B<OSSL_MAC_PARAM_SIZE>) <unsigned integer>
 
 The "size" parameter can also be retrieved with EVP_MAC_CTX_get_mac_size().

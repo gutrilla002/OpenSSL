@@ -36,6 +36,10 @@ OpenSSL 3.4
 
    *Stephan Wurm*
 
+ * ECC groups may now customize their initialization to save CPU.
+
+     *Watson Ladd*
+
 OpenSSL 3.3
 -----------
 

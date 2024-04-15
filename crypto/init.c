@@ -37,6 +37,10 @@
 static int stopped = 0;
 static uint64_t optsdone = 0;
 
+/* needs to be global so it is visible to dllmain.c on Windows */
+extern int ossl_no_cleanup;	/* workarounds CI failures on github */
+int ossl_no_cleanup = 0;
+
 typedef struct ossl_init_stop_st OPENSSL_INIT_STOP;
 struct ossl_init_stop_st {
     void (*handler)(void);
@@ -84,46 +88,6 @@ err:
     init_lock = NULL;
 
     return 0;
-}
-
-static CRYPTO_ONCE register_atexit = CRYPTO_ONCE_STATIC_INIT;
-#if !defined(OPENSSL_SYS_UEFI) && defined(_WIN32)
-static int win32atexit(void)
-{
-    OPENSSL_cleanup();
-    return 0;
-}
-#endif
-
-DEFINE_RUN_ONCE_STATIC(ossl_init_register_atexit)
-{
-#ifndef OPENSSL_NO_ATEXIT
-# ifdef OPENSSL_INIT_DEBUG
-    fprintf(stderr, "OPENSSL_INIT: ossl_init_register_atexit()\n");
-# endif
-# ifndef OPENSSL_SYS_UEFI
-#  if defined(_WIN32) && !defined(__BORLANDC__)
-    /* We use _onexit() in preference because it gets called on DLL unload */
-    if (_onexit(win32atexit) == NULL)
-        return 0;
-#  else
-    if (atexit(OPENSSL_cleanup) != 0)
-        return 0;
-#  endif
-# endif
-#endif
-
-    return 1;
-}
-
-DEFINE_RUN_ONCE_STATIC_ALT(ossl_init_no_register_atexit,
-                           ossl_init_register_atexit)
-{
-#ifdef OPENSSL_INIT_DEBUG
-    fprintf(stderr, "OPENSSL_INIT: ossl_init_no_register_atexit ok!\n");
-#endif
-    /* Do nothing in this case */
-    return 1;
 }
 
 static CRYPTO_ONCE load_crypto_nodelete = CRYPTO_ONCE_STATIC_INIT;
@@ -535,19 +499,8 @@ int OPENSSL_init_crypto(uint64_t opts, const OPENSSL_INIT_SETTINGS *settings)
             return 1;
     }
 
-    /*
-     * Now we don't always set up exit handlers, the INIT_BASE_ONLY calls
-     * should not have the side-effect of setting up exit handlers, and
-     * therefore, this code block is below the INIT_BASE_ONLY-conditioned early
-     * return above.
-     */
-    if ((opts & OPENSSL_INIT_NO_ATEXIT) != 0) {
-        if (!RUN_ONCE_ALT(&register_atexit, ossl_init_no_register_atexit,
-                          ossl_init_register_atexit))
-            return 0;
-    } else if (!RUN_ONCE(&register_atexit, ossl_init_register_atexit)) {
-        return 0;
-    }
+    if ((opts & OPENSSL_INIT_NO_ATEXIT) != 0)
+        ossl_no_cleanup = 1;
 
     if (!RUN_ONCE(&load_crypto_nodelete, ossl_init_load_crypto_nodelete))
         return 0;
@@ -729,3 +682,53 @@ int OPENSSL_atexit(void (*handler)(void))
     return 1;
 }
 
+/*
+ * Library  destructor (a.k.a. _fini()). Code here is derived
+ * from stuff found in providers/fips/self_test.c
+ *
+ * We do kind of best effort cleanup. If given platform/compiler
+ * does not support module destructors then its up to application
+ * to explicitly call OPENSSL_cleanup();
+ */
+#if defined(__GNUC__) && !defined(_AIX)
+
+void ossl_call_cleanup(void);
+
+void __attribute__((destructor))
+ossl_call_cleanup(void)
+{
+    if (ossl_no_cleanup == 0)
+        OPENSSL_cleanup();
+}
+
+#elif (defined(__sun) || defined(_AIX)) && !defined(__GNUC__)
+void ossl_call_cleanup(void);
+# pragma fini(ossl_call_cleanup)
+void ossl_call_cleanup(void)
+{
+    if (ossl_no_cleanup == 0)
+        OPENSSL_cleanup();
+}
+
+#elif defined(__hpux)
+void ossl_call_cleanup(void);
+# pragma fini "ossl_call_cleanup"
+void ossl_call_cleanup(void)
+{
+    if (ossl_no_cleanup == 0)
+        OPENSSL_cleanup();
+}
+#elif defined(__TANDEM)
+/* Method automatically called by the NonStop OS prior to unloading the DLL */
+void __TERM__cleanup(void)
+{
+    if (ossl_no_cleanup == 0)
+        OPENSSL_cleanup();
+}
+#else
+void _fini(void)
+{
+    if (ossl_no_cleanup == 0)
+        OPENSSL_cleanup();
+}
+#endif

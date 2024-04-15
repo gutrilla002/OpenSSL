@@ -36,6 +36,14 @@ OpenSSL 3.4
 
    *Stephan Wurm*
 
+ * OpenSSL libraries no longer use atexit(3) to perform cleanup.
+   The cleanup now runs automatically via a library destructor.
+   Note that invocation of exit handlers registered by the application
+   via OPENSSL_atexit() is arranged by the linker. They are no longer
+   executed via atexit(3).
+
+   *Alexandr Nedvedicky*
+
 OpenSSL 3.3
 -----------
 

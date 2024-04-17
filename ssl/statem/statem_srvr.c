@@ -1615,17 +1615,6 @@ MSG_PROCESS_RETURN tls_process_client_hello(SSL_CONNECTION *s, PACKET *pkt)
                 SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
                 goto err;
             }
-            /*
-             * If we require cookies and this ClientHello doesn't contain one,
-             * just return since we do not want to allocate any memory yet.
-             * So check cookie length...
-             */
-            if (SSL_get_options(SSL_CONNECTION_GET_SSL(s)) & SSL_OP_COOKIE_EXCHANGE) {
-                if (clienthello->dtls_cookie_len == 0) {
-                    OPENSSL_free(clienthello);
-                    return MSG_PROCESS_FINISHED_READING;
-                }
-            }
         }
 
         if (!PACKET_get_length_prefixed_2(pkt, &clienthello->ciphersuites)) {
@@ -1665,7 +1654,23 @@ MSG_PROCESS_RETURN tls_process_client_hello(SSL_CONNECTION *s, PACKET *pkt)
         /* SSLfatal already been called */
         goto err;
     }
+
     s->clienthello = clienthello;
+
+    /*
+     * In DTLSv1.2 and less: If we require cookies and this ClientHello doesn't
+     * contain one, just return since we do not want to allocate any memory yet.
+     * In DTLSv1.3: We continue to process ClientHello's without cookies
+     */
+    if (SSL_CONNECTION_IS_DTLS(s)) {
+        int cli_is_dtls1_3 = clienthello->pre_proc_exts[TLSEXT_IDX_cookie].present;
+        if ((SSL_get_options(SSL_CONNECTION_GET_SSL(s)) & SSL_OP_COOKIE_EXCHANGE)
+                && clienthello->dtls_cookie_len == 0
+                && !cli_is_dtls1_3) {
+            OPENSSL_free(clienthello);
+            return MSG_PROCESS_FINISHED_READING;
+        }
+    }
 
     return MSG_PROCESS_CONTINUE_PROCESSING;
 
@@ -1750,10 +1755,8 @@ static int tls_early_post_process_client_hello(SSL_CONNECTION *s)
         SSLfatal(s, SSL_AD_UNEXPECTED_MESSAGE, SSL_R_NOT_ON_RECORD_BOUNDARY);
         goto err;
     }
-
     if (SSL_CONNECTION_IS_DTLS(s)) {
-        /* Empty cookie was already handled above by returning early. */
-        if (SSL_get_options(ssl) & SSL_OP_COOKIE_EXCHANGE) {
+        if ((SSL_get_options(ssl) & SSL_OP_COOKIE_EXCHANGE) && clienthello->dtls_cookie_len != 0) {
             if (sctx->app_verify_cookie_cb != NULL) {
                 if (sctx->app_verify_cookie_cb(ssl, clienthello->dtls_cookie,
                         clienthello->dtls_cookie_len) == 0) {

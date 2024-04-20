@@ -284,8 +284,9 @@ static int hmac_get_ctx_params(void *vmacctx, OSSL_PARAM params[])
         return 0;
 
 #ifdef FIPS_MODULE
-    if ((p = OSSL_PARAM_locate(params, OSSL_MAC_PARAM_PEDANTIC)) != NULL)
-        return macctx->pedantic;
+    if ((p = OSSL_PARAM_locate(params, OSSL_MAC_PARAM_PEDANTIC)) != NULL
+            && !OSSL_PARAM_set_int(p, macctx->pedantic))
+        return 0;
 #endif
 
     return 1;

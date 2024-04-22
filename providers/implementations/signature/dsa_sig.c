@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -23,6 +23,7 @@
 #include <openssl/params.h>
 #include <openssl/evp.h>
 #include <openssl/proverr.h>
+#include <openssl/indicator.h>
 #include "internal/nelem.h"
 #include "internal/sizes.h"
 #include "internal/cryptlib.h"
@@ -88,6 +89,8 @@ typedef struct {
     EVP_MD *md;
     EVP_MD_CTX *mdctx;
     int operation;
+    int strict_checks;
+    int approved;
 } PROV_DSA_CTX;
 
 
@@ -117,6 +120,8 @@ static void *dsa_newctx(void *provctx, const char *propq)
 
     pdsactx->libctx = PROV_LIBCTX_OF(provctx);
     pdsactx->flag_allow_md = 1;
+    pdsactx->strict_checks = -1;
+    pdsactx->approved = -1;
     if (propq != NULL && (pdsactx->propq = OPENSSL_strdup(propq)) == NULL) {
         OPENSSL_free(pdsactx);
         pdsactx = NULL;
@@ -190,6 +195,50 @@ static int dsa_setup_md(PROV_DSA_CTX *ctx,
     return 1;
 }
 
+#ifdef FIPS_MODULE
+/*
+ * This function is used to indicate that a FIPS related DSA check failed.
+ * It sets the 'approved' value to 0.
+ * If strict_checks is set then it returns 0,
+ * otherwise it returns the result of a indicator callback
+ * (The callback can be used for logging unapproved operations).
+ *
+ * strict_checks' will be retrieved from FIPS configuration settings, if
+ * it has not been set via dsa_set_ctx_params().
+ */
+static int dsa_set_not_approved(PROV_DSA_CTX *pdsactx, const char *desc)
+{
+    pdsactx->approved = 0;
+    if (pdsactx->strict_checks == -1)
+        pdsactx->strict_checks = FIPS_dsa_check(pdsactx->libctx);
+    if (pdsactx->strict_checks == 1
+            || !OSSL_INDICATOR_callback(pdsactx->libctx, "DSA", desc))
+        return 0;
+    return 1;
+}
+
+static int dsa_check_approved(PROV_DSA_CTX *pdsactx, void *vdsa, int signing)
+{
+    int pass;
+
+    pdsactx->approved = 1;
+
+    /* DSA Signing is not approved in FIPS 140-3 */
+    if (signing && !dsa_set_not_approved(pdsactx, "Signature Init"))
+        return 0;
+
+    /* Check if the DSA key is valid */
+    pass = ossl_dsa_check_key(pdsactx->libctx, vdsa, signing);
+    if (!pass) {
+        if (!dsa_set_not_approved(pdsactx, "Key size")) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_KEY_LENGTH);
+            return 0;
+        }
+    }
+    return 1;
+}
+#endif /* FIPS_MODULE */
+
 static int dsa_signverify_init(void *vpdsactx, void *vdsa,
                                const OSSL_PARAM params[], int operation)
 {
@@ -205,11 +254,6 @@ static int dsa_signverify_init(void *vpdsactx, void *vdsa,
     }
 
     if (vdsa != NULL) {
-        if (!ossl_dsa_check_key(pdsactx->libctx, vdsa,
-                                operation == EVP_PKEY_OP_SIGN)) {
-            ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_KEY_LENGTH);
-            return 0;
-        }
         if (!DSA_up_ref(vdsa))
             return 0;
         DSA_free(pdsactx->dsa);
@@ -221,6 +265,10 @@ static int dsa_signverify_init(void *vpdsactx, void *vdsa,
     if (!dsa_set_ctx_params(pdsactx, params))
         return 0;
 
+#ifdef FIPS_MODULE
+    if (!dsa_check_approved(pdsactx, vdsa, operation == EVP_PKEY_OP_SIGN))
+        return 0;
+#endif
     return 1;
 }
 
@@ -368,7 +416,6 @@ int dsa_digest_sign_final(void *vpdsactx, unsigned char *sig, size_t *siglen,
     return dsa_sign(vpdsactx, sig, siglen, sigsize, digest, (size_t)dlen);
 }
 
-
 int dsa_digest_verify_final(void *vpdsactx, const unsigned char *sig,
                             size_t siglen)
 {
@@ -471,6 +518,9 @@ static int dsa_get_ctx_params(void *vpdsactx, OSSL_PARAM *params)
     if (p != NULL && !OSSL_PARAM_set_uint(p, pdsactx->nonce_type))
         return 0;
 
+    p = OSSL_PARAM_locate(params, OSSL_ALG_PARAM_APPROVED_INDICATOR);
+    if (p != NULL && !OSSL_PARAM_set_int(p, pdsactx->approved))
+        return 0;
     return 1;
 }
 
@@ -478,6 +528,7 @@ static const OSSL_PARAM known_gettable_ctx_params[] = {
     OSSL_PARAM_octet_string(OSSL_SIGNATURE_PARAM_ALGORITHM_ID, NULL, 0),
     OSSL_PARAM_utf8_string(OSSL_SIGNATURE_PARAM_DIGEST, NULL, 0),
     OSSL_PARAM_uint(OSSL_SIGNATURE_PARAM_NONCE_TYPE, NULL),
+    OSSL_PARAM_int(OSSL_ALG_PARAM_APPROVED_INDICATOR, NULL),
     OSSL_PARAM_END
 };
 
@@ -517,7 +568,10 @@ static int dsa_set_ctx_params(void *vpdsactx, const OSSL_PARAM params[])
     if (p != NULL
         && !OSSL_PARAM_get_uint(p, &pdsactx->nonce_type))
         return 0;
-
+    p = OSSL_PARAM_locate_const(params, OSSL_ALG_PARAM_STRICT_CHECKS);
+    if (p != NULL
+        && !OSSL_PARAM_get_int(p, &pdsactx->strict_checks))
+        return 0;
     return 1;
 }
 
@@ -525,6 +579,7 @@ static const OSSL_PARAM settable_ctx_params[] = {
     OSSL_PARAM_utf8_string(OSSL_SIGNATURE_PARAM_DIGEST, NULL, 0),
     OSSL_PARAM_utf8_string(OSSL_SIGNATURE_PARAM_PROPERTIES, NULL, 0),
     OSSL_PARAM_uint(OSSL_SIGNATURE_PARAM_NONCE_TYPE, NULL),
+    OSSL_PARAM_int(OSSL_ALG_PARAM_STRICT_CHECKS, NULL),
     OSSL_PARAM_END
 };
 

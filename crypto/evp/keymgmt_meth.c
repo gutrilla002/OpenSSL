@@ -405,6 +405,23 @@ const OSSL_PARAM *EVP_KEYMGMT_gen_settable_params(const EVP_KEYMGMT *keymgmt)
     return keymgmt->gen_settable_params(NULL, provctx);
 }
 
+int evp_keymgmt_gen_get_params(const EVP_KEYMGMT *keymgmt, void *genctx,
+                               OSSL_PARAM params[])
+{
+    if (keymgmt->gen_get_params == NULL)
+        return 0;
+    return keymgmt->gen_get_params(genctx, params);
+}
+
+const OSSL_PARAM *EVP_KEYMGMT_gen_gettable_params(const EVP_KEYMGMT *keymgmt)
+{
+    void *provctx = ossl_provider_ctx(EVP_KEYMGMT_get0_provider(keymgmt));
+
+    if (keymgmt->gen_gettable_params == NULL)
+        return NULL;
+    return keymgmt->gen_gettable_params(NULL, provctx);
+}
+
 void *evp_keymgmt_gen(const EVP_KEYMGMT *keymgmt, void *genctx,
                       OSSL_CALLBACK *cb, void *cbarg)
 {

@@ -598,6 +598,8 @@ void *ossl_lib_ctx_get_data(OSSL_LIB_CTX *ctx, int index)
         return ctx->store_loader_store;
     case OSSL_LIB_CTX_SELF_TEST_CB_INDEX:
         return ctx->self_test_cb;
+    case OSSL_LIB_CTX_INDICATOR_CB_INDEX:
+        return ctx->indicator_cb;
 #endif
 #ifndef OPENSSL_NO_THREAD_POOL
     case OSSL_LIB_CTX_THREAD_INDEX:

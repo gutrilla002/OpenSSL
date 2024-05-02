@@ -366,3 +366,69 @@ Securitycheck = 1
 Key = DSA-4096-256
 Input = "Hello"
 Result = DIGESTSIGNINIT_ERROR
+
+Title = DSA FIPS 140-3 Indicator tests
+
+Availablein = fips
+FIPSversion = >=3.4.0
+DigestSign = SHA256
+# Turn off strict fips checks so the indicator callback runs
+# and return an error from the callback
+IndicatorError=1
+Strict = 0
+Key = DSA-2048-224
+Input = "Hello"
+Output = 00
+Result = DIGESTSIGNINIT_ERROR
+
+Availablein = fips
+FIPSversion = >=3.4.0
+DigestSign = SHA256
+# Turn off strict fips checks so the indicator callback runs
+# without causing an error. In this case the callback gets
+# run multiple times.
+IndicatorError=0
+Strict = 0
+Key = DSA-1024
+Input = "Hello"
+Output = 00
+Result = SIGNATURE_MISMATCH
+
+Availablein = fips
+FIPSversion = >=3.4.0
+DigestSign = SHA256
+# Turn off strict fips checks so the indicator callback runs
+# and return success from the callback
+IndicatorError=0
+Strict = 0
+Key = DSA-2048-224
+Input = "Hello"
+Output = 00
+Result = SIGNATURE_MISMATCH
+
+Availablein = fips
+FIPSversion = >=3.4.0
+DigestSign = SHA256
+# Turn off strict fips checks so the indicator callback runs
+# and return an error from the callback after the init
+IndicatorError=0
+Strict = 0
+Key = DSA-2048-224
+IndicatorError=1
+Input = "Hello"
+Output = 00
+Result = DIGESTSIGNFINAL_ERROR
+
+Availablein = fips
+FIPSversion = >=3.4.0
+DigestSign = SHA256
+# Turn off strict fips checks initially so the indicator
+# callback runs but dont return an error from the callback
+IndicatorError=0
+Strict = 0
+Key = DSA-2048-224
+# Turn on strict checks after the init
+Strict = 1
+Input = "Hello"
+Output = 00
+Result = DIGESTSIGNFINAL_ERROR

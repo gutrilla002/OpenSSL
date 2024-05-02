@@ -3373,6 +3373,21 @@ static unsigned int psk_server_cb(SSL *ssl, const char *identity,
 
 static int artificial_ticket_time = 0;
 
+static int sub_session_time(SSL_SESSION *sess)
+{
+    OSSL_TIME tick_time;
+
+    /*
+     * Internally to SSL_SESSION_get_time the return value is a cast from
+     * time_t to long - we're just reversing that here
+     */
+    tick_time = ossl_time_from_time_t((time_t)SSL_SESSION_get_time(sess));
+    tick_time = ossl_time_subtract(tick_time, ossl_seconds2time(10));
+
+    return SSL_SESSION_set_time(sess,
+                                (long)ossl_time_to_time_t(tick_time)) != 0;
+}
+
 static int ed_gen_cb(SSL *s, void *arg)
 {
     SSL_SESSION *sess = SSL_get0_session(s);
@@ -3388,10 +3403,7 @@ static int ed_gen_cb(SSL *s, void *arg)
         return 1;
     artificial_ticket_time--;
 
-    if (SSL_SESSION_set_time(sess, SSL_SESSION_get_time(sess) - 10) == 0)
-        return 0;
-
-    return 1;
+    return sub_session_time(sess);
 }
 
 /*
@@ -3490,9 +3502,7 @@ static int setupearly_data_test(SSL_CTX **cctx, SSL_CTX **sctx, SSL **clientssl,
      * Artificially give the ticket some age to match the artificial age we
      * gave it on the server side
      */
-    if (artificial
-            && !TEST_long_gt(SSL_SESSION_set_time(*sess,
-                                                  SSL_SESSION_get_time(*sess) - 10), 0))
+    if (artificial && !TEST_true(sub_session_time(*sess)))
         return 0;
 
     if (!TEST_true(create_ssl_objects(*sctx, *cctx, serverssl,
@@ -3501,6 +3511,25 @@ static int setupearly_data_test(SSL_CTX **cctx, SSL_CTX **sctx, SSL **clientssl,
         return 0;
 
     return 1;
+}
+
+static int check_early_data_timeout(OSSL_TIME timer)
+{
+    int res = 0;
+
+    /*
+     * Early data is time sensitive. We have an approx 8 second allowance
+     * between writing the early data and reading it. If we exceed that time
+     * then this test will fail. This can sometimes (rarely) occur in normal CI
+     * operation. We can try and detect this and just ignore the result of this
+     * test if it has taken too long. We assume anything over 7 seconds is too
+     * long
+     */
+    timer = ossl_time_subtract(ossl_time_now(), timer);
+    if (ossl_time_compare(timer, ossl_seconds2time(7)) >= 0)
+        res = TEST_skip("Test took too long, ignoring result");
+
+    return res;
 }
 
 static int test_early_data_read_write(int idx)
@@ -3512,6 +3541,7 @@ static int test_early_data_read_write(int idx)
     unsigned char buf[20], data[1024];
     size_t readbytes, written, eoedlen, rawread, rawwritten;
     BIO *rbio;
+    OSSL_TIME timer;
 
     /* Artificially give the next 2 tickets some age for non PSK sessions */
     if (idx != 2)
@@ -3525,13 +3555,20 @@ static int test_early_data_read_write(int idx)
     artificial_ticket_time = 0;
 
     /* Write and read some early data */
+    timer = ossl_time_now();
     if (!TEST_true(SSL_write_early_data(clientssl, MSG1, strlen(MSG1),
                                         &written))
-            || !TEST_size_t_eq(written, strlen(MSG1))
-            || !TEST_int_eq(SSL_read_early_data(serverssl, buf,
-                                                sizeof(buf), &readbytes),
-                            SSL_READ_EARLY_DATA_SUCCESS)
-            || !TEST_mem_eq(MSG1, readbytes, buf, strlen(MSG1))
+            || !TEST_size_t_eq(written, strlen(MSG1)))
+        goto end;
+
+    if (!TEST_int_eq(SSL_read_early_data(serverssl, buf, sizeof(buf),
+                                         &readbytes),
+                     SSL_READ_EARLY_DATA_SUCCESS)) {
+        testresult = check_early_data_timeout(timer);
+        goto end;
+    }
+
+    if (!TEST_mem_eq(MSG1, readbytes, buf, strlen(MSG1))
             || !TEST_int_eq(SSL_get_early_data_status(serverssl),
                             SSL_EARLY_DATA_ACCEPTED))
         goto end;
@@ -3748,6 +3785,7 @@ static int test_early_data_replay_int(int idx, int usecb, int confopt)
     SSL_SESSION *sess = NULL;
     size_t readbytes, written;
     unsigned char buf[20];
+    OSSL_TIME timer;
 
     allow_ed_cb_called = 0;
 
@@ -3802,6 +3840,7 @@ static int test_early_data_replay_int(int idx, int usecb, int confopt)
         goto end;
 
     /* Write and read some early data */
+    timer = ossl_time_now();
     if (!TEST_true(SSL_write_early_data(clientssl, MSG1, strlen(MSG1),
                                         &written))
             || !TEST_size_t_eq(written, strlen(MSG1)))
@@ -3822,8 +3861,11 @@ static int test_early_data_replay_int(int idx, int usecb, int confopt)
         /* In this case the callback decides to accept the early data */
         if (!TEST_int_eq(SSL_read_early_data(serverssl, buf, sizeof(buf),
                                              &readbytes),
-                         SSL_READ_EARLY_DATA_SUCCESS)
-                || !TEST_mem_eq(MSG1, strlen(MSG1), buf, readbytes)
+                         SSL_READ_EARLY_DATA_SUCCESS)) {
+            testresult = check_early_data_timeout(timer);
+            goto end;
+        }
+        if (!TEST_mem_eq(MSG1, strlen(MSG1), buf, readbytes)
                    /*
                     * Server will have sent its flight so client can now send
                     * end of early data and complete its half of the handshake
@@ -4340,13 +4382,19 @@ static int test_early_data_psk(int idx)
                 || !TEST_int_eq(ERR_GET_REASON(ERR_get_error()), err))
             goto end;
     } else {
+        OSSL_TIME timer = ossl_time_now();
+
         if (!TEST_true(SSL_write_early_data(clientssl, MSG1, strlen(MSG1),
                                             &written)))
             goto end;
 
         if (!TEST_int_eq(SSL_read_early_data(serverssl, buf, sizeof(buf),
-                                             &readbytes), readearlyres)
-                || (readearlyres == SSL_READ_EARLY_DATA_SUCCESS
+                                             &readbytes), readearlyres)) {
+            testresult = check_early_data_timeout(timer);
+            goto end;
+        }
+
+        if ((readearlyres == SSL_READ_EARLY_DATA_SUCCESS
                     && !TEST_mem_eq(buf, readbytes, MSG1, strlen(MSG1)))
                 || !TEST_int_eq(SSL_get_early_data_status(serverssl), edstatus)
                 || !TEST_int_eq(SSL_connect(clientssl), connectres))
@@ -4384,6 +4432,7 @@ static int test_early_data_psk_with_all_ciphers(int idx)
     unsigned char buf[20];
     size_t readbytes, written;
     const SSL_CIPHER *cipher;
+    OSSL_TIME timer;
     const char *cipher_str[] = {
         TLS1_3_RFC_AES_128_GCM_SHA256,
         TLS1_3_RFC_AES_256_GCM_SHA384,
@@ -4441,14 +4490,19 @@ static int test_early_data_psk_with_all_ciphers(int idx)
         goto end;
 
     SSL_set_connect_state(clientssl);
+    timer = ossl_time_now();
     if (!TEST_true(SSL_write_early_data(clientssl, MSG1, strlen(MSG1),
                                         &written)))
         goto end;
 
     if (!TEST_int_eq(SSL_read_early_data(serverssl, buf, sizeof(buf),
                                          &readbytes),
-                                         SSL_READ_EARLY_DATA_SUCCESS)
-            || !TEST_mem_eq(buf, readbytes, MSG1, strlen(MSG1))
+                                         SSL_READ_EARLY_DATA_SUCCESS)) {
+        testresult = check_early_data_timeout(timer);
+        goto end;
+    }
+
+    if (!TEST_mem_eq(buf, readbytes, MSG1, strlen(MSG1))
             || !TEST_int_eq(SSL_get_early_data_status(serverssl),
                                                       SSL_EARLY_DATA_ACCEPTED)
             || !TEST_int_eq(SSL_connect(clientssl), 1)
@@ -7625,6 +7679,7 @@ static int test_info_callback(int tst)
         SSL_SESSION *sess = NULL;
         size_t written, readbytes;
         unsigned char buf[80];
+        OSSL_TIME timer;
 
         /* early_data tests */
         if (!TEST_true(setupearly_data_test(&cctx, &sctx, &clientssl,
@@ -7639,13 +7694,20 @@ static int test_info_callback(int tst)
                               sslapi_info_callback);
 
         /* Write and read some early data and then complete the connection */
+        timer = ossl_time_now();
         if (!TEST_true(SSL_write_early_data(clientssl, MSG1, strlen(MSG1),
                                             &written))
-                || !TEST_size_t_eq(written, strlen(MSG1))
-                || !TEST_int_eq(SSL_read_early_data(serverssl, buf,
-                                                    sizeof(buf), &readbytes),
-                                SSL_READ_EARLY_DATA_SUCCESS)
-                || !TEST_mem_eq(MSG1, readbytes, buf, strlen(MSG1))
+                || !TEST_size_t_eq(written, strlen(MSG1)))
+            goto end;
+
+        if (!TEST_int_eq(SSL_read_early_data(serverssl, buf,
+                                             sizeof(buf), &readbytes),
+                         SSL_READ_EARLY_DATA_SUCCESS)) {
+            testresult = check_early_data_timeout(timer);
+            goto end;
+        }
+
+        if (!TEST_mem_eq(MSG1, readbytes, buf, strlen(MSG1))
                 || !TEST_int_eq(SSL_get_early_data_status(serverssl),
                                 SSL_EARLY_DATA_ACCEPTED)
                 || !TEST_true(create_ssl_connection(serverssl, clientssl,

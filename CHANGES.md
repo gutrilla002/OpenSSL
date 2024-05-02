@@ -59,6 +59,11 @@ OpenSSL 3.4
 
    *Damian Hobson-Garcia*
 
+ * The `-rawin` option of the `pkeyutl` apps is now implied (and thus no more
+   required) when signing or verifying with an Ed25519 or Ed448 key.
+
+   *David von Oheimb*
+
 OpenSSL 3.3
 -----------
 

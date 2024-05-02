@@ -2303,7 +2303,7 @@ breaking changes, and mappings for the large list of deprecated functions.
 
    *Billy Bob Brumley*
 
- * Added OSSL_PARAM_BLD to the public interface.  This allows OSSL_PARAM
+ * Added OSSL_PARAM_BLD to the public interface. This allows OSSL_PARAM
    arrays to be more easily constructed via a series of utility functions.
    Create a parameter builder using OSSL_PARAM_BLD_new(), add parameters using
    the various push functions and finally convert to a passable OSSL_PARAM
@@ -15792,8 +15792,8 @@ s-cbc           3624.96k     5258.21k     5530.91k     5624.30k     5628.26k
 
  * Fix BN_rand_range bug pointed out by Dominikus Scherkl
    <Dominikus.Scherkl@biodata.com>.  (The previous implementation
-   worked incorrectly for those cases where range = `10..._2`  and
-   `3*range`  is two bits longer than  range.)
+   worked incorrectly for those cases where range = `10..._2` and
+   `3*range` is two bits longer than range.)
 
    *Bodo Moeller*
 
@@ -15903,7 +15903,7 @@ s-cbc           3624.96k     5258.21k     5530.91k     5624.30k     5628.26k
 
  * Bugfix in ssl3_accept (ssl/s3_srvr.c): Case SSL3_ST_SW_HELLO_REQ_C
    should end in 'break', not 'goto end' which circumvents various
-   cleanups done in state SSL_ST_OK.   But session related stuff
+   cleanups done in state SSL_ST_OK. But session related stuff
    must be disabled for SSL_ST_OK in the case that we just sent a
    HelloRequest.
 
@@ -16306,11 +16306,11 @@ s-cbc           3624.96k     5258.21k     5530.91k     5624.30k     5628.26k
    2. Fix logical glitch in is_MemCheck_on() aka CRYPTO_is_mem_check_on().
 
    3. Count how many times MemCheck_off() has been called so that
-      nested use can be treated correctly.  This also avoids
+      nested use can be treated correctly. This also avoids
       inband-signalling in the previous code (which relied on the
       assumption that thread ID 0 is impossible).
 
-   *Bodo Moeller*
+   *Bodo Moeller* 
 
  * Add "-rand" option also to s_client and s_server.
 
@@ -16543,7 +16543,7 @@ s-cbc           3624.96k     5258.21k     5530.91k     5624.30k     5628.26k
    with an initial SSL 3.0/TLS record that is too small to contain the
    first two bytes of the ClientHello message, i.e. client_version.
    (Note that this is a pathologic case that probably has never happened
-   in real life.)  The previous approach was to use the version number
+   in real life.) The previous approach was to use the version number
    from the record header as a substitute; but our protocol choice
    should not depend on that one because it is not authenticated
    by the Finished messages.
@@ -16577,15 +16577,15 @@ s-cbc           3624.96k     5258.21k     5530.91k     5624.30k     5628.26k
    *Steve Henson*
 
  * On VMS, stdout may very well lead to a file that is written to
-   in a record-oriented fashion.  That means that every write() will
+   in a record-oriented fashion. That means that every write() will
    write a separate record, which will be read separately by the
-   programs trying to read from it.  This can be very confusing.
+   programs trying to read from it. This can be very confusing.
 
    The solution is to put a BIO filter in the way that will buffer
    text until a linefeed is reached, and then write everything a
    line at a time, so every record written will be an actual line,
    not chunks of lines and not (usually doesn't happen, but I've
-   seen it once) several lines in one record.  BIO_f_linebuffer() is
+   seen it once) several lines in one record. BIO_f_linebuffer() is
    the answer.
 
    Currently, it's a VMS-only method, because that's where it has
@@ -16621,10 +16621,10 @@ s-cbc           3624.96k     5258.21k     5530.91k     5624.30k     5628.26k
    *Ulf Möller*
 
  * Add RPM specification openssl.spec and modify it to build three
-   packages.  The default package contains applications, application
-   documentation and run-time libraries.  The devel package contains
-   include files, static libraries and function documentation.  The
-   doc package contains the contents of the doc directory.  The original
+   packages. The default package contains applications, application
+   documentation and run-time libraries. The devel package contains
+   include files, static libraries and function documentation. The
+   doc package contains the contents of the doc directory. The original
    openssl.spec was provided by Damien Miller <djm@mindrot.org>.
 
    *Richard Levitte*

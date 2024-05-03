@@ -39,7 +39,17 @@ OpenSSL 3.4
  * The X25519 and X448 key exchange implementation in the FIPS provider
    is unapproved and has `fips=no` property.
 
-   * Tomas Mraz*
+   *Tomas Mraz*
+
+ * SHAKE-128 and SHAKE-256 implementations have no default digest length
+   anymore. That means these algorithms cannot be used with
+   EVP_DigestFinal/_ex() unless the `xoflen` param is set before.
+
+   This change was necessary because the preexisting default lengths were
+   half the size necessary for full collision resistance supported by these
+   algorithms.
+
+   *Tomas Mraz*
 
  * Use an empty renegotiate extension in TLS client hellos instead of
    the empty renegotiation SCSV, for all connections with a minimum TLS

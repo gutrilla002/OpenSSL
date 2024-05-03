@@ -27,6 +27,17 @@
 # define NO_INTERLOCKEDOR64
 #endif
 
+/*
+ * VC++ 2010 or earlier compilers do not support static inline.
+ * To work around this problem, we can use a macro.
+ */
+
+#if (defined(_MSC_VER) && _MSC_VER <= 1600)
+# define INLINE_VS
+#else
+# define INLINE_VS inline
+#endif
+
 #include <openssl/crypto.h>
 #include <crypto/cryptlib.h>
 #include "internal/common.h"
@@ -168,7 +179,7 @@ void ossl_rcu_lock_free(CRYPTO_RCU_LOCK *lock)
     OPENSSL_free(lock);
 }
 
-static inline struct rcu_qp *get_hold_current_qp(CRYPTO_RCU_LOCK *lock)
+static INLINE_VS struct rcu_qp *get_hold_current_qp(CRYPTO_RCU_LOCK *lock)
 {
     uint32_t qp_idx;
 

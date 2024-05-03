@@ -45,7 +45,7 @@
 # endif
 
 # define TLS_MAX_VERSION_INTERNAL TLS1_3_VERSION
-# define DTLS_MAX_VERSION_INTERNAL DTLS1_2_VERSION
+# define DTLS_MAX_VERSION_INTERNAL DTLS1_3_VERSION
 
 /*
  * DTLS version numbers are strange because they're inverted. Except for
@@ -257,6 +257,11 @@
 /* Check if an SSL structure is using DTLS */
 # define SSL_CONNECTION_IS_DTLS(s) \
     (SSL_CONNECTION_GET_SSL(s)->method->ssl3_enc->enc_flags & SSL_ENC_FLAG_DTLS)
+
+/* Check if an SSL structure is using DTLS */
+# define SSL_CONNECTION_MIDDLEBOX_IS_ENABLED(s) \
+    ((s->options & SSL_OP_ENABLE_MIDDLEBOX_COMPAT) != 0 \
+     && !SSL_CONNECTION_IS_DTLS(s))
 
 /* Check if we are using DTLSv1.3 */
 # define SSL_CONNECTION_IS_DTLS13(s) (SSL_CONNECTION_IS_DTLS(s) \

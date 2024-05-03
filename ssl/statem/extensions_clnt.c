@@ -17,16 +17,15 @@ EXT_RETURN tls_construct_ctos_renegotiate(SSL_CONNECTION *s, WPACKET *pkt,
                                           size_t chainidx)
 {
     if (!s->renegotiate) {
+        const int version1_3 = SSL_CONNECTION_IS_DTLS(s) ? DTLS1_3_VERSION
+                                                         : TLS1_3_VERSION;
+
         /* If not renegotiating, send an empty RI extension to indicate support */
-
-#if DTLS_MAX_VERSION_INTERNAL != DTLS1_2_VERSION
-# error Internal DTLS version error
-#endif
-
-        if (!SSL_CONNECTION_IS_DTLS(s)
-            && (s->min_proto_version >= TLS1_3_VERSION
-                || (ssl_security(s, SSL_SECOP_VERSION, 0, TLS1_VERSION, NULL)
-                    && s->min_proto_version <= TLS1_VERSION))) {
+        if ((s->min_proto_version != 0
+                && ssl_version_cmp(s, s->min_proto_version, version1_3) >= 0)
+            || (!SSL_CONNECTION_IS_DTLS(s)
+                && ssl_security(s, SSL_SECOP_VERSION, 0, TLS1_VERSION, NULL)
+                && s->min_proto_version <= TLS1_VERSION)) {
             /*
              * For TLS <= 1.0 SCSV is used instead, and for TLS 1.3 this
              * extension isn't used at all.
@@ -618,7 +617,7 @@ EXT_RETURN tls_construct_ctos_psk_kex_modes(SSL_CONNECTION *s, WPACKET *pkt,
                                             unsigned int context, X509 *x,
                                             size_t chainidx)
 {
-#ifndef OPENSSL_NO_TLS1_3
+#if !(defined(OPENSSL_NO_TLS1_3) && defined(OPENSSL_NO_DTLS1_3))
     int nodhe = s->options & SSL_OP_ALLOW_NO_DHE_KEX;
 
     if (!WPACKET_put_bytes_u16(pkt, TLSEXT_TYPE_psk_kex_modes)
@@ -640,7 +639,7 @@ EXT_RETURN tls_construct_ctos_psk_kex_modes(SSL_CONNECTION *s, WPACKET *pkt,
     return EXT_RETURN_SENT;
 }
 
-#ifndef OPENSSL_NO_TLS1_3
+#if !(defined(OPENSSL_NO_TLS1_3) && defined(OPENSSL_NO_DTLS1_3))
 static int add_key_share(SSL_CONNECTION *s, WPACKET *pkt, unsigned int curve_id)
 {
     unsigned char *encoded_point = NULL;
@@ -701,7 +700,7 @@ EXT_RETURN tls_construct_ctos_key_share(SSL_CONNECTION *s, WPACKET *pkt,
                                         unsigned int context, X509 *x,
                                         size_t chainidx)
 {
-#ifndef OPENSSL_NO_TLS1_3
+#if !(defined(OPENSSL_NO_TLS1_3) && defined(OPENSSL_NO_DTLS1_3))
     size_t i, num_groups = 0;
     const uint16_t *pgroups = NULL;
     uint16_t curve_id = 0;
@@ -1040,7 +1039,7 @@ EXT_RETURN tls_construct_ctos_psk(SSL_CONNECTION *s, WPACKET *pkt,
                                   unsigned int context,
                                   X509 *x, size_t chainidx)
 {
-#ifndef OPENSSL_NO_TLS1_3
+#if !(defined(OPENSSL_NO_TLS1_3) && defined(OPENSSL_NO_DTLS1_3))
     uint32_t agesec, agems = 0;
     size_t reshashsize = 0, pskhashsize = 0, binderoffset, msglen;
     unsigned char *resbinder = NULL, *pskbinder = NULL, *msgstart = NULL;
@@ -1242,7 +1241,7 @@ EXT_RETURN tls_construct_ctos_post_handshake_auth(SSL_CONNECTION *s, WPACKET *pk
                                                   ossl_unused X509 *x,
                                                   ossl_unused size_t chainidx)
 {
-#ifndef OPENSSL_NO_TLS1_3
+#if !(defined(OPENSSL_NO_TLS1_3) && defined(OPENSSL_NO_DTLS1_3))
     if (!s->pha_enabled)
         return EXT_RETURN_NOT_SENT;
 
@@ -1818,7 +1817,7 @@ int tls_parse_stoc_key_share(SSL_CONNECTION *s, PACKET *pkt,
                              unsigned int context, X509 *x,
                              size_t chainidx)
 {
-#ifndef OPENSSL_NO_TLS1_3
+#if !(defined(OPENSSL_NO_TLS1_3) && defined(OPENSSL_NO_DTLS1_3))
     unsigned int group_id;
     PACKET encoded_pt;
     EVP_PKEY *ckey = s->s3.tmp.pkey, *skey = NULL;
@@ -2031,7 +2030,7 @@ int tls_parse_stoc_psk(SSL_CONNECTION *s, PACKET *pkt,
                        unsigned int context, X509 *x,
                        size_t chainidx)
 {
-#ifndef OPENSSL_NO_TLS1_3
+#if !(defined(OPENSSL_NO_TLS1_3) && defined(OPENSSL_NO_DTLS1_3))
     unsigned int identity;
 
     if (!PACKET_get_net_2(pkt, &identity) || PACKET_remaining(pkt) != 0) {
